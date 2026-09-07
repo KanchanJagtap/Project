@@ -1,0 +1,9 @@
+city-anpr/data/cctv/uvh26/
+city-anpr/.venv/
+city-anpr/data/videos/
+city-anpr/runs/
+*.pt
+__pycache__/
+*.pyc
+.DS_Store
+Impsters_git_backup/
