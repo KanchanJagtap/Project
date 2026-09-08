@@ -13,7 +13,10 @@ class VehicleTracker:
         7: "truck",
     }
 
-    def __init__(self, model_path="yolo11n.pt"):
+    def __init__(
+        self,
+        model_path="runs/detect/runs/cctv/uvh26_80ep-2/weights/best.pt",
+    ):
         self.model = YOLO(model_path)
 
     def track_video(self, video_path):
