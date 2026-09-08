@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
+import cv2
+import numpy as np
 
 from backend.anpr import process_plate
+from backend.real_anpr import get_anpr_pipeline
 
 
 app = FastAPI(
@@ -29,3 +32,61 @@ def health():
 @app.get("/anpr-demo")
 def anpr_demo():
     return process_plate()
+
+
+@app.get("/anpr/status")
+def anpr_status():
+    try:
+        pipeline = get_anpr_pipeline()
+
+        return {
+            "status": "ready",
+            "engine": type(pipeline).__name__,
+            "message": "Real ANPR pipeline is loaded",
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
+
+
+@app.post("/anpr/process")
+async def process_anpr_image(
+    file: UploadFile = File(...)
+):
+    try:
+        contents = await file.read()
+
+        image_array = np.frombuffer(
+            contents,
+            dtype=np.uint8,
+        )
+
+        image = cv2.imdecode(
+            image_array,
+            cv2.IMREAD_COLOR,
+        )
+
+        if image is None:
+            raise ValueError(
+                "Uploaded file is not a valid image"
+            )
+
+        pipeline = get_anpr_pipeline()
+
+        detections = pipeline.detect_and_read(image)
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "detection_count": len(detections),
+            "detections": detections,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
