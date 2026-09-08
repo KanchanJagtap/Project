@@ -1,177 +1,166 @@
-from ultralytics import YOLO
+from ai.tracking.vehicle_tracker import VehicleTracker
 
 
 class VehicleIntelligence:
     """
-    Vehicle detection + tracking + movement intelligence.
+    Vehicle intelligence layer built on top of VehicleTracker.
 
-    Provides:
-    - Persistent Track ID
-    - Vehicle type
-    - First/last seen frame
-    - Frames tracked
-    - Best confidence
-    - Bounding box
-    - Center position
-    - Trajectory
-    - Movement direction
-    - X/Y movement
+    Responsibilities:
+    - Track vehicles using YOLO + ByteTrack
+    - Maintain per-vehicle history
+    - Calculate movement direction
+    - Track first/last seen frame
+    - Track best confidence
+    - Store trajectory
     """
 
-    VEHICLE_CLASSES = {
-        2: "car",
-        3: "motorcycle",
-        5: "bus",
-        7: "truck",
-    }
+    VEHICLE_CLASSES = VehicleTracker.VEHICLE_CLASSES
 
-    def __init__(self, model_path="yolo11n.pt"):
-
+    def __init__(self):
         print("Loading vehicle detection model...")
 
-        self.model = YOLO(model_path)
+        self.tracker = VehicleTracker()
 
         self.vehicles = {}
 
     def calculate_direction(self, trajectory):
+        """
+        Estimate vehicle movement direction from trajectory points.
+
+        Returns:
+            "down"
+            "up"
+            "right"
+            "left"
+            "stationary"
+            "unknown"
+        """
 
         if len(trajectory) < 2:
-            return "UNKNOWN"
+            return "unknown"
 
-        start_x, start_y = trajectory[0]
-        end_x, end_y = trajectory[-1]
+        first_x, first_y = trajectory[0]
+        last_x, last_y = trajectory[-1]
 
-        dx = end_x - start_x
-        dy = end_y - start_y
+        dx = last_x - first_x
+        dy = last_y - first_y
 
-        # Ignore extremely small movement
-        if abs(dx) < 10 and abs(dy) < 10:
-            return "STATIONARY"
+        threshold = 5
 
-        # Determine dominant movement axis
-        if abs(dx) >= abs(dy):
+        if abs(dx) < threshold and abs(dy) < threshold:
+            return "stationary"
 
+        if abs(dx) > abs(dy):
             if dx > 0:
-                return "RIGHT"
+                return "right"
+            else:
+                return "left"
 
-            return "LEFT"
+        if dy > 0:
+            return "down"
 
-        else:
-
-            if dy > 0:
-                return "DOWN"
-
-            return "UP"
+        return "up"
 
     def process_video(self, video_path):
+        """
+        Process a video using VehicleTracker.
+        """
 
-        print(f"\nProcessing video: {video_path}")
-        print("Starting YOLO + ByteTrack...\n")
+        print("\nStarting YOLO + ByteTrack...")
+        print(f"Video: {video_path}\n")
 
-        results = self.model.track(
-            source=video_path,
-            tracker="bytetrack.yaml",
-            classes=list(self.VEHICLE_CLASSES.keys()),
-            persist=True,
-            stream=True,
-            verbose=False,
-        )
+        results = self.tracker.track_video(video_path)
 
-        frame_number = 0
+        frame_count = 0
 
         for result in results:
-
-            frame_number += 1
+            frame_count += 1
 
             if result.boxes is None:
                 continue
 
             boxes = result.boxes
 
-            for i in range(len(boxes)):
+            if boxes.id is None:
+                continue
 
-                class_id = int(boxes.cls[i])
+            track_ids = boxes.id.int().cpu().tolist()
+            class_ids = boxes.cls.int().cpu().tolist()
+            confidences = boxes.conf.cpu().tolist()
+            xyxy = boxes.xyxy.cpu().tolist()
 
-                confidence = float(boxes.conf[i])
-
+            for track_id, class_id, confidence, bbox in zip(
+                track_ids,
+                class_ids,
+                confidences,
+                xyxy,
+            ):
                 if class_id not in self.VEHICLE_CLASSES:
-                    continue
-
-                if boxes.id is None:
                     continue
 
                 vehicle_type = self.VEHICLE_CLASSES[class_id]
 
-                track_id = int(boxes.id[i])
+                x1, y1, x2, y2 = bbox
 
-                x1, y1, x2, y2 = map(
-                    int,
-                    boxes.xyxy[i].tolist()
-                )
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
 
-                # Center point
-                center_x = int((x1 + x2) / 2)
-                center_y = int((y1 + y2) / 2)
+                center = (center_x, center_y)
 
-                center = [center_x, center_y]
-
-                # New track
                 if track_id not in self.vehicles:
-
                     self.vehicles[track_id] = {
                         "id": track_id,
                         "type": vehicle_type,
-                        "first_seen": frame_number,
-                        "last_seen": frame_number,
+                        "first_seen": frame_count,
+                        "last_seen": frame_count,
                         "frames_tracked": 1,
                         "best_confidence": confidence,
-                        "bbox": [x1, y1, x2, y2],
+                        "bbox": tuple(bbox),
                         "center": center,
                         "trajectory": [center],
                     }
 
-                # Existing track
                 else:
-
                     vehicle = self.vehicles[track_id]
 
-                    vehicle["last_seen"] = frame_number
+                    vehicle["last_seen"] = frame_count
 
                     vehicle["frames_tracked"] += 1
 
                     vehicle["best_confidence"] = max(
                         vehicle["best_confidence"],
-                        confidence
+                        confidence,
                     )
 
-                    vehicle["bbox"] = [
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                    ]
+                    vehicle["bbox"] = tuple(bbox)
 
                     vehicle["center"] = center
 
                     vehicle["trajectory"].append(center)
 
-        self.print_summary(frame_number)
+                    vehicle["type"] = vehicle_type
 
-    def print_summary(self, frame_number):
+            if frame_count % 25 == 0:
+                print(
+                    f"Processed frame {frame_count} | "
+                    f"Unique vehicles: {len(self.vehicles)}"
+                )
 
-        print("\n" + "=" * 70)
-        print("VEHICLE INTELLIGENCE V3 SUMMARY")
-        print("=" * 70)
+        print("\nProcessing complete.")
+        print(f"Total frames: {frame_count}")
 
-        print(f"\nFrames processed: {frame_number}")
+    def print_summary(self):
+        """
+        Print vehicle intelligence summary.
+        """
 
-        print(
-            f"Unique tracked IDs: "
-            f"{len(self.vehicles)}"
-        )
+        print("\n" + "=" * 60)
+        print("VEHICLE INTELLIGENCE SUMMARY")
+        print("=" * 60)
 
-        # Vehicle type statistics
-        type_counts = {
+        print(f"Unique vehicles: {len(self.vehicles)}")
+
+        counts = {
             "car": 0,
             "motorcycle": 0,
             "bus": 0,
@@ -179,64 +168,66 @@ class VehicleIntelligence:
         }
 
         for vehicle in self.vehicles.values():
-
             vehicle_type = vehicle["type"]
 
-            if vehicle_type in type_counts:
-                type_counts[vehicle_type] += 1
+            if vehicle_type in counts:
+                counts[vehicle_type] += 1
 
-        print("\nVehicle type counts:")
+        print("\nVehicle Types:")
 
-        for vehicle_type, count in type_counts.items():
+        for vehicle_type, count in counts.items():
+            print(f"  {vehicle_type}: {count}")
 
-            print(
-                f"  {vehicle_type}: {count}"
-            )
+        print("\nSample Vehicle Records:")
 
-        # Detailed movement information
-        print("\nVehicle movement details:\n")
-
-        for vehicle_id in sorted(self.vehicles):
-
-            vehicle = self.vehicles[vehicle_id]
-
-            trajectory = vehicle["trajectory"]
-
-            start_position = trajectory[0]
-
-            end_position = trajectory[-1]
+        for vehicle_id, vehicle in list(self.vehicles.items())[:10]:
 
             direction = self.calculate_direction(
-                trajectory
-            )
-
-            dx = end_position[0] - start_position[0]
-
-            dy = end_position[1] - start_position[1]
-
-            print(
-                f"ID: {vehicle['id']} | "
-                f"Type: {vehicle['type']} | "
-                f"Direction: {direction} | "
-                f"Frames: {vehicle['frames_tracked']} | "
-                f"Best Conf: {vehicle['best_confidence']:.2f}"
+                vehicle["trajectory"]
             )
 
             print(
-                f"    Start: {start_position} | "
-                f"End: {end_position} | "
-                f"Movement: dx={dx}, dy={dy}"
+                f"\nVehicle ID: {vehicle_id}"
             )
 
-        print("\n" + "=" * 70)
-        print("VEHICLE INTELLIGENCE V3 COMPLETE")
-        print("=" * 70)
+            print(
+                f"  Type: {vehicle['type']}"
+            )
+
+            print(
+                f"  First seen: frame {vehicle['first_seen']}"
+            )
+
+            print(
+                f"  Last seen: frame {vehicle['last_seen']}"
+            )
+
+            print(
+                f"  Frames tracked: {vehicle['frames_tracked']}"
+            )
+
+            print(
+                f"  Best confidence: "
+                f"{vehicle['best_confidence']:.3f}"
+            )
+
+            print(
+                f"  Direction: {direction}"
+            )
+
+            print(
+                f"  Trajectory points: "
+                f"{len(vehicle['trajectory'])}"
+            )
+
+        print("\n" + "=" * 60)
 
 
 if __name__ == "__main__":
-
     video_path = "data/videos/traffic.mp4"
 
     intelligence = VehicleIntelligence()
 
     intelligence.process_video(video_path)
+
+    intelligence.print_summary()
