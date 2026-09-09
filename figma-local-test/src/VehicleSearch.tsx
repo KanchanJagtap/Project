@@ -1,0 +1,342 @@
+import { useState, useEffect } from 'react';
+import { VEHICLE_DB, JUNCTIONS, type VehicleProfile, type Detection } from './data';
+
+const TRAJECTORY_CAMS = ['CAM-01', 'CAM-04', 'CAM-07', 'CAM-12', 'CAM-18', 'CAM-22'];
+
+function TrajectoryMap({ detections }: { detections: Detection[] }) {
+  if (detections.length < 2) return null;
+  const nodes = detections.slice(0, 6);
+  const W = 600;
+  const H = 120;
+  const spacing = W / Math.max(nodes.length, 1);
+
+  return (
+    <div className="rounded-xl overflow-hidden border" style={{ borderColor: '#E2E8F0', background: '#F8FAFC' }}>
+      <div className="px-4 py-2 border-b" style={{ borderColor: '#E2E8F0' }}>
+        <span className="text-xs font-bold" style={{ color: '#0F172A' }}>Multi-Camera Trajectory</span>
+      </div>
+      <div className="p-4 overflow-x-auto">
+        <svg width={Math.max(W, nodes.length * 130)} height={H} viewBox={`0 0 ${Math.max(W, nodes.length * 130)} ${H}`}>
+          {nodes.map((d, i) => {
+            const x = 65 + i * 130;
+            const isLast = i === nodes.length - 1;
+            return (
+              <g key={i}>
+                {/* Connector line */}
+                {i < nodes.length - 1 && (
+                  <g>
+                    <line x1={x + 30} y1={H / 2} x2={x + 100} y2={H / 2}
+                      stroke="#CBD5E1" strokeWidth="2" strokeDasharray="4 3"/>
+                    <polygon points={`${x + 100},${H / 2 - 4} ${x + 100},${H / 2 + 4} ${x + 110},${H / 2}`}
+                      fill="#94A3B8"/>
+                  </g>
+                )}
+                {/* Node */}
+                <circle cx={x} cy={H / 2} r={22} fill={isLast ? '#1D4ED8' : '#E2E8F0'} stroke={isLast ? '#1D4ED8' : '#CBD5E1'} strokeWidth="2"/>
+                <text x={x} y={H / 2 - 5} textAnchor="middle" fontSize="9" fontWeight="bold"
+                  fill={isLast ? 'white' : '#0F172A'} fontFamily="JetBrains Mono, monospace">
+                  {d.cameraId}
+                </text>
+                <text x={x} y={H / 2 + 7} textAnchor="middle" fontSize="7"
+                  fill={isLast ? 'rgba(255,255,255,0.8)' : '#64748B'} fontFamily="Inter, sans-serif">
+                  {d.speed}km/h
+                </text>
+                {/* Time below node */}
+                <text x={x} y={H - 8} textAnchor="middle" fontSize="8"
+                  fill="#94A3B8" fontFamily="JetBrains Mono, monospace">
+                  {d.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function VehicleCard({ profile }: { profile: VehicleProfile }) {
+  const typeIcon = {
+    car: '🚗', truck: '🚛', bus: '🚌', motorcycle: '🏍️', auto: '🛺', suv: '🚙',
+  }[profile.vehicleType];
+
+  return (
+    <div className="grid grid-cols-3 gap-4 rounded-xl p-4 border" style={{ borderColor: '#E2E8F0', background: '#F8FAFC' }}>
+      <div className="col-span-1">
+        <div className="w-full h-28 rounded-lg flex items-center justify-center text-5xl"
+          style={{ background: '#E2E8F0' }}>
+          {typeIcon}
+        </div>
+      </div>
+      <div className="col-span-2 space-y-2">
+        <div className="mono text-2xl font-bold" style={{ color: '#0F172A' }}>{profile.plate}</div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          {[
+            { label: 'Owner', value: profile.owner },
+            { label: 'Phone', value: profile.phone },
+            { label: 'Vehicle', value: `${profile.make} ${profile.model}` },
+            { label: 'Color', value: profile.color },
+            { label: 'State', value: profile.registrationState },
+            { label: 'Registered', value: profile.registrationDate },
+          ].map(d => (
+            <div key={d.label}>
+              <span style={{ color: '#94A3B8' }}>{d.label}: </span>
+              <span className="font-semibold" style={{ color: '#0F172A' }}>{d.value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 mt-2">
+          <span className="text-xs font-bold px-2 py-0.5 rounded"
+            style={{ background: profile.violations > 3 ? '#FEF2F2' : '#F0FDF4', color: profile.violations > 3 ? '#DC2626' : '#16A34A' }}>
+            {profile.violations} Violations
+          </span>
+          {profile.isTracked && (
+            <span className="text-xs font-bold px-2 py-0.5 rounded blink-fast" style={{ background: '#1D4ED8', color: 'white' }}>
+              TRACKING ACTIVE
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function VehicleSearch() {
+  const [query, setQuery] = useState('');
+  const [result, setResult] = useState<VehicleProfile | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [tracking, setTracking] = useState<Record<string, boolean>>({});
+  const [recentDetection, setRecentDetection] = useState<{ cam: string; junction: string; time: Date } | null>(null);
+  const [liveAlert, setLiveAlert] = useState(false);
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotFound(false);
+    setRecentDetection(null);
+    setLiveAlert(false);
+    const profile = VEHICLE_DB[query.trim().toUpperCase()];
+    if (profile) {
+      setResult(profile);
+    } else {
+      setResult(null);
+      setNotFound(true);
+    }
+  };
+
+  const handleStartTracking = (plate: string) => {
+    setTracking(prev => ({ ...prev, [plate]: true }));
+    if (result) {
+      setResult(prev => prev ? { ...prev, isTracked: true } : null);
+    }
+    // Simulate a detection after 8 seconds
+    setTimeout(() => {
+      const j = JUNCTIONS[Math.floor(Math.random() * JUNCTIONS.length)];
+      const cam = j.cameras[Math.floor(Math.random() * j.cameras.length)];
+      setRecentDetection({ cam, junction: j.name, time: new Date() });
+      setLiveAlert(true);
+      setTimeout(() => setLiveAlert(false), 5000);
+    }, 8000);
+  };
+
+  const quickPlates = Object.keys(VEHICLE_DB);
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden" style={{ background: '#F8FAFC' }}>
+      {/* Header */}
+      <div className="bg-white border-b px-6 py-4" style={{ borderColor: '#E2E8F0' }}>
+        <h1 className="text-xl font-bold mb-3" style={{ color: '#0F172A' }}>Vehicle Search & Tracking</h1>
+
+        {/* Search form */}
+        <form onSubmit={handleSearch} className="flex gap-3">
+          <div className="flex-1 relative">
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value.toUpperCase())}
+              placeholder="Enter number plate (e.g. KA 01 AB 1234)"
+              className="w-full px-4 py-3 pl-10 rounded-xl border text-sm mono outline-none font-semibold"
+              style={{ borderColor: '#CBD5E1', color: '#0F172A' }}
+              onFocus={e => e.target.style.borderColor = '#1D4ED8'}
+              onBlur={e => e.target.style.borderColor = '#CBD5E1'}
+            />
+            <svg className="absolute left-3 top-3.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2">
+              <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+            </svg>
+          </div>
+          <button type="submit" className="px-6 py-3 rounded-xl font-semibold text-white text-sm"
+            style={{ background: '#1D4ED8' }}>
+            Search
+          </button>
+        </form>
+
+        {/* Quick access */}
+        <div className="flex items-center gap-2 mt-3">
+          <span className="text-xs" style={{ color: '#94A3B8' }}>Quick:</span>
+          {quickPlates.map(p => (
+            <button key={p} onClick={() => { setQuery(p); }}
+              className="text-xs px-2.5 py-1 rounded-lg border mono font-semibold transition-all hover:border-blue-300"
+              style={{ borderColor: '#E2E8F0', color: '#475569' }}>
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        {/* Live alert */}
+        {liveAlert && recentDetection && (
+          <div className="rounded-xl p-4 border-l-4 blink-fast"
+            style={{ background: '#EFF6FF', borderColor: '#1D4ED8' }}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center"
+                style={{ background: '#1D4ED8', color: 'white', fontSize: 20 }}>📡</div>
+              <div>
+                <div className="font-bold text-sm" style={{ color: '#0F172A' }}>
+                  🚨 Vehicle Re-spotted! — {result?.plate}
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: '#1D4ED8' }}>
+                  Detected at <strong>{recentDetection.cam}</strong> — {recentDetection.junction}
+                  {' '} · {recentDetection.time.toLocaleTimeString('en-IN')}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Not found */}
+        {notFound && (
+          <div className="rounded-xl p-6 text-center border" style={{ borderColor: '#E2E8F0', background: 'white' }}>
+            <div className="text-4xl mb-3">🔍</div>
+            <div className="font-bold text-lg" style={{ color: '#0F172A' }}>Vehicle Not Currently Detected</div>
+            <div className="text-sm mt-1" style={{ color: '#64748B' }}>
+              No record found for <span className="mono font-bold">{query}</span> in the ANPR database.
+            </div>
+            <div className="mt-3 text-xs" style={{ color: '#94A3B8' }}>
+              The vehicle may be unregistered, outside camera coverage, or the plate may be incorrect.
+            </div>
+          </div>
+        )}
+
+        {/* Result */}
+        {result && (
+          <div className="space-y-5">
+            {/* Vehicle card */}
+            <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: '#E2E8F0' }}>
+              <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: '#E2E8F0' }}>
+                <span className="text-sm font-bold" style={{ color: '#0F172A' }}>Vehicle Profile</span>
+                {!result.isTracked ? (
+                  <button onClick={() => handleStartTracking(result.plate)}
+                    className="px-4 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-2"
+                    style={{ background: '#1D4ED8' }}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-white blink-fast"/>
+                    Start Tracking
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 blink-fast"/>
+                    <span className="text-xs font-bold" style={{ color: '#1D4ED8' }}>Tracking Active</span>
+                  </div>
+                )}
+              </div>
+              <div className="p-4">
+                <VehicleCard profile={result} />
+              </div>
+            </div>
+
+            {/* Trajectory map */}
+            {result.detections.length >= 2 && (
+              <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: '#E2E8F0' }}>
+                <div className="px-4 py-3 border-b" style={{ borderColor: '#E2E8F0' }}>
+                  <span className="text-sm font-bold" style={{ color: '#0F172A' }}>Movement Trajectory</span>
+                </div>
+                <div className="p-4">
+                  <TrajectoryMap detections={result.detections} />
+                </div>
+              </div>
+            )}
+
+            {/* Detection history */}
+            <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: '#E2E8F0' }}>
+              <div className="px-4 py-3 border-b" style={{ borderColor: '#E2E8F0' }}>
+                <span className="text-sm font-bold" style={{ color: '#0F172A' }}>Detection History</span>
+              </div>
+              <div className="divide-y" style={{ borderColor: '#F1F5F9' }}>
+                {result.detections.map((d, i) => (
+                  <div key={i} className="flex items-center gap-4 px-4 py-3">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                      style={{ background: '#EFF6FF', color: '#1D4ED8' }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold" style={{ color: '#0F172A' }}>
+                        {d.junctionName}
+                      </div>
+                      <div className="text-xs mt-0.5" style={{ color: '#64748B' }}>
+                        {d.direction} · Speed: {d.speed} km/h
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="mono text-xs font-semibold" style={{ color: '#1D4ED8' }}>{d.cameraId}</div>
+                      <div className="mono text-xs" style={{ color: '#94A3B8' }}>
+                        {d.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                      </div>
+                      <div className="text-xs" style={{ color: '#16A34A' }}>Conf: {d.confidence}%</div>
+                    </div>
+                  </div>
+                ))}
+                {recentDetection && (
+                  <div className="flex items-center gap-4 px-4 py-3"
+                    style={{ background: '#EFF6FF' }}>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                      style={{ background: '#1D4ED8', color: 'white' }}>
+                      📡
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-bold" style={{ color: '#1D4ED8' }}>
+                        {recentDetection.junction} — LIVE DETECTION
+                      </div>
+                      <div className="text-xs mt-0.5" style={{ color: '#3B82F6' }}>
+                        Vehicle spotted by tracking system
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="mono text-xs font-semibold" style={{ color: '#1D4ED8' }}>{recentDetection.cam}</div>
+                      <div className="mono text-xs" style={{ color: '#64748B' }}>
+                        {recentDetection.time.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Violations history */}
+            {result.violations > 0 && (
+              <div className="rounded-xl p-4 border-l-4" style={{ background: '#FEF2F2', borderColor: '#DC2626' }}>
+                <div className="font-semibold text-sm mb-1" style={{ color: '#DC2626' }}>
+                  ⚠ {result.violations} recorded violations
+                </div>
+                <div className="text-xs" style={{ color: '#64748B' }}>
+                  This vehicle has a history of traffic violations. Enhanced monitoring active.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Default state */}
+        {!result && !notFound && (
+          <div className="rounded-xl p-10 text-center border bg-white" style={{ borderColor: '#E2E8F0' }}>
+            <div className="text-5xl mb-4">🔍</div>
+            <div className="font-bold text-lg mb-2" style={{ color: '#0F172A' }}>Search Any Vehicle</div>
+            <div className="text-sm" style={{ color: '#64748B' }}>
+              Enter a vehicle registration number to view its profile, detection history,
+              violations record and real-time location tracking.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

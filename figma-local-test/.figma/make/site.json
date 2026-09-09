@@ -1,0 +1,10 @@
+{
+  "description": "AI-powered city traffic control platform enabling real-time monitoring, adaptive signal management, violation detection, and emergency response coordination for traffic police.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
