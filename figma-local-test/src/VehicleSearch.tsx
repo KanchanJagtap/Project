@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { VEHICLE_DB, JUNCTIONS, type VehicleProfile, type Detection } from './data';
 
 const TRAJECTORY_CAMS = ['CAM-01', 'CAM-04', 'CAM-07', 'CAM-12', 'CAM-18', 'CAM-22'];
@@ -117,6 +117,142 @@ export default function VehicleSearch() {
     ocr_confidence: number;
     vehicle_found: boolean;
   } | null>(null);
+
+  const [anprChooserOpen, setAnprChooserOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setCameraOpen(false);
+  };
+
+  const startCamera = async () => {
+    setAnprChooserOpen(false);
+    setCameraError('');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera access is not supported by this browser.');
+      setCameraOpen(true);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      cameraStreamRef.current = stream;
+      setCameraOpen(true);
+
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      });
+    } catch (error) {
+      console.error('Camera access error:', error);
+
+      setCameraError(
+        'Camera access was denied or is unavailable. Please allow camera permission and try again.'
+      );
+
+      setCameraOpen(true);
+    }
+  };
+
+  const handleMediaSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+
+    if (file) {
+      setAnprChooserOpen(false);
+      handleRealANPR(file);
+    }
+
+    e.currentTarget.value = '';
+  };
+
+  const openMediaPicker = () => {
+    setAnprChooserOpen(false);
+    mediaInputRef.current?.click();
+  };
+
+  const captureFromCamera = () => {
+    const video = videoRef.current;
+
+    if (!video || video.readyState < 2) {
+      setCameraError(
+        'Camera is not ready yet. Please wait a moment and try again.'
+      );
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+
+    const context = canvas.getContext('2d');
+
+    if (!context) {
+      setCameraError('Unable to capture the camera frame.');
+      return;
+    }
+
+    context.drawImage(
+      video,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    canvas.toBlob(blob => {
+      if (!blob) {
+        setCameraError('Unable to create the captured image.');
+        return;
+      }
+
+      const file = new File(
+        [blob],
+        `anpr-camera-${Date.now()}.jpg`,
+        { type: 'image/jpeg' }
+      );
+
+      stopCamera();
+      handleRealANPR(file);
+    }, 'image/jpeg', 0.92);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current
+          .getTracks()
+          .forEach(track => track.stop());
+
+        cameraStreamRef.current = null;
+      }
+    };
+  }, []);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -275,32 +411,253 @@ export default function VehicleSearch() {
             Search
           </button>
 
-        <label
-          className="px-5 py-3 rounded-xl font-semibold text-sm cursor-pointer border transition-all hover:bg-blue-50"
+        <button
+          type="button"
+          disabled={anprLoading}
+          onClick={() => {
+            setAnprError('');
+            setAnprChooserOpen(true);
+          }}
+          className="px-5 py-3 rounded-xl font-semibold text-sm border transition-all hover:bg-blue-50 disabled:opacity-60 disabled:cursor-not-allowed"
           style={{
             color: '#1D4ED8',
             borderColor: '#BFDBFE',
             background: '#FFFFFF',
           }}
         >
-          {anprLoading ? 'Scanning...' : 'Real ANPR Scan'}
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            disabled={anprLoading}
-            onChange={e => {
-              const file = e.target.files?.[0];
+          {anprLoading ? 'Scanning...' : '📷 Real ANPR Scan'}
+        </button>
 
-              if (file) {
-                handleRealANPR(file);
-              }
-
-              e.currentTarget.value = '';
-            }}
-          />
-        </label>
+        <input
+          ref={mediaInputRef}
+          type="file"
+          accept="image/*,video/*"
+          className="hidden"
+          disabled={anprLoading}
+          onChange={handleMediaSelection}
+        />
         </form>
+
+        {anprChooserOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: 'rgba(15, 23, 42, 0.55)' }}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl bg-white shadow-2xl border"
+              style={{ borderColor: '#E2E8F0' }}
+            >
+              <div className="p-6">
+                <div className="flex items-start justify-between mb-5">
+                  <div>
+                    <h3
+                      className="text-lg font-bold"
+                      style={{ color: '#0F172A' }}
+                    >
+                      Real ANPR Scan
+                    </h3>
+
+                    <p
+                      className="text-sm mt-1"
+                      style={{ color: '#64748B' }}
+                    >
+                      Choose how you want to provide the vehicle image.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setAnprChooserOpen(false)}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-lg"
+                    style={{
+                      color: '#64748B',
+                      background: '#F8FAFC',
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={startCamera}
+                    className="rounded-xl border p-5 text-left transition-all hover:bg-blue-50 hover:border-blue-300"
+                    style={{ borderColor: '#BFDBFE' }}
+                  >
+                    <div className="text-3xl mb-3">📷</div>
+
+                    <div
+                      className="font-semibold"
+                      style={{ color: '#0F172A' }}
+                    >
+                      Capture by Camera
+                    </div>
+
+                    <div
+                      className="text-xs mt-1"
+                      style={{ color: '#64748B' }}
+                    >
+                      Use your laptop camera
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openMediaPicker}
+                    className="rounded-xl border p-5 text-left transition-all hover:bg-blue-50 hover:border-blue-300"
+                    style={{ borderColor: '#BFDBFE' }}
+                  >
+                    <div className="text-3xl mb-3">🖼️</div>
+
+                    <div
+                      className="font-semibold"
+                      style={{ color: '#0F172A' }}
+                    >
+                      Select from Media
+                    </div>
+
+                    <div
+                      className="text-xs mt-1"
+                      style={{ color: '#64748B' }}
+                    >
+                      Choose an image or video
+                    </div>
+                  </button>
+                </div>
+
+                <div
+                  className="mt-4 rounded-lg p-3 text-xs"
+                  style={{
+                    background: '#F8FAFC',
+                    color: '#64748B',
+                  }}
+                >
+                  The selected image is sent to the same AI ANPR engine used
+                  by the existing Real ANPR Scan.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {cameraOpen && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            style={{ background: 'rgba(15, 23, 42, 0.75)' }}
+          >
+            <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl overflow-hidden">
+              <div
+                className="flex items-center justify-between px-5 py-4 border-b"
+                style={{ borderColor: '#E2E8F0' }}
+              >
+                <div>
+                  <h3
+                    className="font-bold"
+                    style={{ color: '#0F172A' }}
+                  >
+                    Capture Vehicle Image
+                  </h3>
+
+                  <p
+                    className="text-xs mt-1"
+                    style={{ color: '#64748B' }}
+                  >
+                    Position the license plate clearly inside the camera view.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={stopCamera}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-lg"
+                  style={{
+                    color: '#64748B',
+                    background: '#F8FAFC',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="p-5">
+                {cameraError ? (
+                  <div
+                    className="rounded-xl p-4 border"
+                    style={{
+                      background: '#FEF2F2',
+                      borderColor: '#FECACA',
+                      color: '#B91C1C',
+                    }}
+                  >
+                    <div className="font-semibold mb-1">
+                      Camera unavailable
+                    </div>
+
+                    <div className="text-sm">
+                      {cameraError}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative rounded-xl overflow-hidden bg-black aspect-video">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                      <div
+                        className="w-[72%] h-[38%] rounded-xl border-2"
+                        style={{ borderColor: '#60A5FA' }}
+                      />
+                    </div>
+
+                    <div className="absolute bottom-3 left-0 right-0 text-center">
+                      <span
+                        className="inline-block px-3 py-1 rounded-full text-xs font-medium"
+                        style={{
+                          background: 'rgba(15,23,42,0.75)',
+                          color: '#FFFFFF',
+                        }}
+                      >
+                        Align license plate inside the guide
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 mt-4">
+                  <button
+                    type="button"
+                    onClick={stopCamera}
+                    className="px-5 py-2.5 rounded-xl border font-semibold text-sm"
+                    style={{
+                      borderColor: '#CBD5E1',
+                      color: '#475569',
+                    }}
+                  >
+                    Cancel
+                  </button>
+
+                  {!cameraError && (
+                    <button
+                      type="button"
+                      onClick={captureFromCamera}
+                      disabled={anprLoading}
+                      className="px-6 py-2.5 rounded-xl font-semibold text-sm text-white disabled:opacity-60"
+                      style={{ background: '#1D4ED8' }}
+                    >
+                      {anprLoading ? 'Scanning...' : '📸 Capture & Scan'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Quick access */}
         <div className="flex items-center gap-2 mt-3">
