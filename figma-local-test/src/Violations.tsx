@@ -113,7 +113,7 @@ function ViolationDetailModal({ violation, onClose, onProcess }: {
               <button onClick={handleIssue}
                 className="flex-1 py-3 rounded-xl font-bold text-white text-sm"
                 style={{ background: '#DC2626' }}>
-                Issue E-Challan (₹{violation.fine.toLocaleString()})
+                Generate Demo E-Challan (₹{violation.fine.toLocaleString()})
               </button>
               <button onClick={onClose}
                 className="flex-1 py-3 rounded-xl font-semibold text-sm border"
@@ -124,7 +124,7 @@ function ViolationDetailModal({ violation, onClose, onProcess }: {
           ) : (
             <div className="py-4 rounded-xl text-center font-bold text-green-700"
               style={{ background: '#F0FDF4' }}>
-              ✓ E-Challan issued · SMS sent to vehicle owner
+              ✓ Demo e-Challan generated · Prototype notification queued
             </div>
           )}
         </div>
