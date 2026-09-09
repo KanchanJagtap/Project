@@ -109,41 +109,12 @@ export default function VehicleSearch() {
   const [recentDetection, setRecentDetection] = useState<{ cam: string; junction: string; time: Date } | null>(null);
   const [liveAlert, setLiveAlert] = useState(false);
 
-  const handleSearch = async (e: React.FormEvent) => {
+  const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setNotFound(false);
     setRecentDetection(null);
     setLiveAlert(false);
-
-    const plate = query.trim().toUpperCase();
-
-    if (!plate) {
-      setResult(null);
-      setNotFound(true);
-      return;
-    }
-
-    try {
-      const response = await fetch('http://127.0.0.1:8000/anpr-demo');
-
-      if (response.ok) {
-        const data = await response.json();
-
-        if (data.plate_number === plate && data.vehicle) {
-          const localProfile = VEHICLE_DB[plate];
-
-          if (localProfile) {
-            setResult(localProfile);
-            return;
-          }
-        }
-      }
-    } catch {
-      // Backend unavailable — use the local prototype database below.
-    }
-
-    const profile = VEHICLE_DB[plate];
-
+    const profile = VEHICLE_DB[query.trim().toUpperCase()];
     if (profile) {
       setResult(profile);
     } else {
