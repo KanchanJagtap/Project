@@ -71,7 +71,7 @@ function initVehicles(seed: number): CanvasVehicle[] {
     const maxVel = 0.0018 + ((seed * 7 + i) % 7) * 0.0004;
     return {
       id: `v${seed}-${i}`,
-      plate: PLATES_KA[(seed + i) % PLATES_KA.length],
+      plate: PLATES_MH[(seed + i) % PLATES_MH.length],
       type,
       y: -0.1 - (i / 10) * 0.8,
       lane: i % 3,
@@ -93,68 +93,123 @@ function calcArmPressure(arm: SignalArm, hasLargeVehicle: boolean): number {
   p += Math.max(0, (80 - arm.avgSpeed) / 80) * 15;
   p += Math.min(arm.waitingTime / 120, 1) * 15;
   p += (arm.occupancy / 100) * 10;
+
   if (hasLargeVehicle) p += 15;
+
   return Math.min(100, Math.round(p));
 }
 
 function computeJunctionPressure(junction: Junction) {
-  const high = junction.congestionLevel === 'critical' || junction.congestionLevel === 'high';
+  const high =
+    junction.congestionLevel === 'critical' ||
+    junction.congestionLevel === 'high';
+
   const r = () => Math.random();
+
   return {
-    north: calcArmPressure(junction.signals.north, high && r() > 0.6),
-    south: calcArmPressure(junction.signals.south, high && r() > 0.7),
-    east:  calcArmPressure(junction.signals.east,  high && r() > 0.5),
-    west:  calcArmPressure(junction.signals.west,  high && r() > 0.65),
+    north: calcArmPressure(
+      junction.signals.north,
+      high && r() > 0.6,
+    ),
+    south: calcArmPressure(
+      junction.signals.south,
+      high && r() > 0.7,
+    ),
+    east: calcArmPressure(
+      junction.signals.east,
+      high && r() > 0.5,
+    ),
+    west: calcArmPressure(
+      junction.signals.west,
+      high && r() > 0.65,
+    ),
   };
 }
 
 function computeGreenDuration(dirPressure: number): number {
-  const normalized = Math.min(dirPressure / 200, 1);
-  return Math.max(15, Math.min(45, Math.round(20 + normalized * 25)));
+  const normalized = Math.min(dirPressure / 100, 1);
+
+  return Math.max(
+    15,
+    Math.min(45, Math.round(20 + normalized * 25)),
+  );
 }
 
-function getArmSignalColor(arm: ArmDir, phase: SignalPhaseState): SigColor {
-  if (phase.type === 'allred') return 'red';
-  const isNS = arm === 'north' || arm === 'south';
-  const isEW = arm === 'east'  || arm === 'west';
-  if (phase.type === 'green') {
-    if (phase.direction === 'NS') return isNS ? 'green' : 'red';
-    return isEW ? 'green' : 'red';
+function getNextDirection(direction: ArmDir): ArmDir {
+  const sequence: ArmDir[] = [
+    'north',
+    'east',
+    'south',
+    'west',
+  ];
+
+  const index = sequence.indexOf(direction);
+
+  return sequence[(index + 1) % sequence.length];
+}
+
+function getArmSignalColor(
+  arm: ArmDir,
+  phase: SignalPhaseState,
+): SigColor {
+  if (phase.type === 'allred') {
+    return 'red';
   }
-  // yellow
-  if (phase.direction === 'NS') return isNS ? 'yellow' : 'red';
-  return isEW ? 'yellow' : 'red';
+
+  if (arm !== phase.direction) {
+    return 'red';
+  }
+
+  if (phase.type === 'green') {
+    return 'green';
+  }
+
+  return 'yellow';
 }
 
 function genAiReason(
-  direction: 'NS' | 'EW',
+  direction: ArmDir,
   greenDuration: number,
-  pressure: { north: number; south: number; east: number; west: number },
+  pressure: {
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+  },
   junction: Junction,
 ): string {
-  const nsPressure = pressure.north + pressure.south;
-  const ewPressure = pressure.east + pressure.west;
+  const dirPressure = pressure[direction];
   const base = greenDuration - 20;
-  const highArm = direction === 'NS'
-    ? (pressure.north > pressure.south ? 'N approach' : 'S approach')
-    : (pressure.east > pressure.west ? 'E approach' : 'W approach');
-  const dirPressure = direction === 'NS' ? nsPressure : ewPressure;
+
+  const directionLabel: Record<ArmDir, string> = {
+    north: 'North approach',
+    east: 'East approach',
+    south: 'South approach',
+    west: 'West approach',
+  };
+
+  const currentApproach = directionLabel[direction];
 
   if (junction.congestionLevel === 'critical') {
-    return `Critical congestion detected — ${highArm} at ${Math.round(dirPressure / 2)}% pressure. Cycle maximized.`;
+    return `Critical congestion detected — ${currentApproach} at ${dirPressure}% pressure. Green time maximized.`;
   }
+
   if (base >= 15) {
-    return `High queue + waiting time on ${highArm} — Green extended by ${base}s over baseline.`;
+    return `High queue + waiting time on ${currentApproach} — Green extended by ${base}s over baseline.`;
   }
+
   if (base <= -3) {
-    const oppDir = direction === 'NS' ? 'EW' : 'NS';
-    const oppPressure = direction === 'NS' ? ewPressure : nsPressure;
-    return `${oppDir} pressure (${Math.round(oppPressure / 2)}%) exceeds ${direction} — cycle shortened by ${Math.abs(base)}s.`;
+    return `${currentApproach} pressure is lower — cycle shortened by ${Math.abs(base)}s to serve other approaches.`;
   }
-  if (junction.aiReason?.includes('large vehicle') || junction.aiReason?.includes('truck')) {
-    return `Large vehicle detected on ${highArm} — additional 10s allocated to clear lane.`;
+
+  if (
+    junction.aiReason?.includes('large vehicle') ||
+    junction.aiReason?.includes('truck')
+  ) {
+    return `Large vehicle detected on ${currentApproach} — additional green time allocated to clear lane.`;
   }
-  return `Balanced flow across arms — standard ${greenDuration}s cycle assigned.`;
+
+  return `Adaptive control selected ${currentApproach} at ${dirPressure}% pressure — standard ${greenDuration}s green phase.`;
 }
 
 // ─── useJunctionSignal hook ───────────────────────────────────────────────────
@@ -164,15 +219,24 @@ function useJunctionSignal(junction: Junction, seed: number) {
   jRef.current = junction;
 
   const [phase, setPhase] = useState<SignalPhaseState>(() => {
-    const dir: 'NS' | 'EW' = seed % 2 === 0 ? 'NS' : 'EW';
+    const sequence: ArmDir[] = [
+      'north',
+      'east',
+      'south',
+      'west',
+    ];
+
+    const dir = sequence[seed % sequence.length];
     const pressure = computeJunctionPressure(junction);
+    const greenDuration = computeGreenDuration(pressure[dir]);
+
     return {
       type: 'green',
       direction: dir,
-      timer: 20,
-      greenDuration: 20,
-      nextDirection: dir === 'NS' ? 'EW' : 'NS',
-      aiReason: 'System initialized — standard cycle.',
+      timer: greenDuration,
+      greenDuration,
+      nextDirection: getNextDirection(dir),
+      aiReason: 'System initialized — sequential adaptive cycle.',
       pressure,
     };
   });
@@ -180,44 +244,70 @@ function useJunctionSignal(junction: Junction, seed: number) {
   useEffect(() => {
     const id = setInterval(() => {
       setPhase(prev => {
-        if (prev.timer > 1) return { ...prev, timer: prev.timer - 1 };
-        // Transition
+        if (prev.timer > 1) {
+          return {
+            ...prev,
+            timer: prev.timer - 1,
+          };
+        }
+
+        // Green → Yellow
         if (prev.type === 'green') {
-          return { ...prev, type: 'yellow', timer: 4 };
+          return {
+            ...prev,
+            type: 'yellow',
+            timer: 4,
+          };
         }
+
+        // Yellow → All Red
         if (prev.type === 'yellow') {
-          return { ...prev, type: 'allred', timer: 2 };
+          return {
+            ...prev,
+            type: 'allred',
+            timer: 2,
+          };
         }
-        // allred → green
+
+        // All Red → next directional green
         const j = jRef.current;
         const pressure = computeJunctionPressure(j);
         const nextDir = prev.nextDirection;
-        const dirPressure = nextDir === 'NS'
-          ? pressure.north + pressure.south
-          : pressure.east  + pressure.west;
-        const greenDuration = computeGreenDuration(dirPressure);
+        const greenDuration = computeGreenDuration(
+          pressure[nextDir],
+        );
+
         return {
           type: 'green',
           direction: nextDir,
           timer: greenDuration,
           greenDuration,
-          nextDirection: nextDir === 'NS' ? 'EW' : 'NS',
-          aiReason: genAiReason(nextDir, greenDuration, pressure, j),
+          nextDirection: getNextDirection(nextDir),
+          aiReason: genAiReason(
+            nextDir,
+            greenDuration,
+            pressure,
+            j,
+          ),
           pressure,
         };
       });
     }, 1000);
+
     return () => clearInterval(id);
   }, []);
 
   const armSignals: Record<ArmDir, SigColor> = {
     north: getArmSignalColor('north', phase),
     south: getArmSignalColor('south', phase),
-    east:  getArmSignalColor('east',  phase),
-    west:  getArmSignalColor('west',  phase),
+    east: getArmSignalColor('east', phase),
+    west: getArmSignalColor('west', phase),
   };
 
-  return { armSignals, phaseState: phase };
+  return {
+    armSignals,
+    phaseState: phase,
+  };
 }
 
 // ─── CCTV Canvas ──────────────────────────────────────────────────────────────
