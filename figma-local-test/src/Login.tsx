@@ -53,7 +53,7 @@ export default function Login({ onLogin }: LoginProps) {
 
         <div>
           <div className="text-blue-400 text-sm font-semibold tracking-widest uppercase mb-4">
-            Bengaluru Metropolitan Area
+            Maharashtra Traffic Network
           </div>
           <h1 className="text-5xl font-bold text-white leading-tight mb-6">
             City-Wide<br />Traffic Control<br />Command Center
@@ -91,7 +91,7 @@ export default function Login({ onLogin }: LoginProps) {
                 </svg>
               </div>
               <h2 className="text-2xl font-bold" style={{ color: '#0F172A' }}>Secure Login</h2>
-              <p className="text-slate-500 text-sm mt-1">Traffic Management Authority — Bengaluru</p>
+              <p className="text-slate-500 text-sm mt-1">Traffic Management Authority — Maharashtra</p>
             </div>
 
             {/* Quick fill hint */}
@@ -181,7 +181,7 @@ export default function Login({ onLogin }: LoginProps) {
             <div className="mt-6 pt-6 border-t text-center">
               <p className="text-xs text-slate-400">
                 Authorized personnel only. All access is monitored and logged.<br />
-                Karnataka Traffic Police — Ministry of Home Affairs
+                Maharashtra Traffic Police — Ministry of Home Affairs
               </p>
             </div>
           </div>

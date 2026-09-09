@@ -152,7 +152,7 @@ export default function VehicleSearch() {
             <input
               value={query}
               onChange={e => setQuery(e.target.value.toUpperCase())}
-              placeholder="Enter number plate (e.g. KA 01 AB 1234)"
+              placeholder="Enter number plate (e.g. MH12AB1234)"
               className="w-full px-4 py-3 pl-10 rounded-xl border text-sm mono outline-none font-semibold"
               style={{ borderColor: '#CBD5E1', color: '#0F172A' }}
               onFocus={e => e.target.style.borderColor = '#1D4ED8'}

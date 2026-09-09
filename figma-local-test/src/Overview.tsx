@@ -154,7 +154,7 @@ const CityMap = ({ junctions, onJunctionClick }: {
 
         {/* Title */}
         <text x="740" y="20" textAnchor="end" fontSize="10" fill="#94A3B8" fontFamily="Inter, sans-serif">
-          Bengaluru Metropolitan Area
+          Maharashtra Traffic Network
         </text>
       </svg>
 
@@ -362,7 +362,7 @@ export default function Overview({ onNavigate }: OverviewProps) {
           <div className="flex items-center gap-2 mt-0.5">
             <div className="w-1.5 h-1.5 rounded-full bg-green-500 blink-fast"/>
             <span className="text-xs" style={{ color: '#64748B' }}>
-              Live · Bengaluru Metropolitan Area · {new Date().toLocaleString('en-IN', { timeStyle: 'short', dateStyle: 'medium' })}
+              Live · Maharashtra Traffic Network · {new Date().toLocaleString('en-IN', { timeStyle: 'short', dateStyle: 'medium' })}
             </span>
           </div>
         </div>

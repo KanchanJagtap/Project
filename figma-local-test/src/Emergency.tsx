@@ -619,7 +619,7 @@ function AddVehicleForm({ onAdd }: { onAdd: (v: EmergencyVehicle) => void }) {
           <div>
             <label className="block text-xs font-semibold mb-1" style={{ color: '#475569' }}>Vehicle Number</label>
             <input type="text" value={form.vehicleNo} onChange={e => setForm(f => ({ ...f, vehicleNo: e.target.value }))}
-              placeholder="KA-01 AMB 0000"
+              placeholder="MH-12-AMB-1042"
               className="w-full px-3 py-2 rounded-lg border text-sm mono outline-none"
               style={{ borderColor: '#E2E8F0' }} required/>
           </div>

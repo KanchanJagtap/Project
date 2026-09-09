@@ -44,10 +44,10 @@ const VBASE: Record<CVType, { w: number; h: number; label: string; colorRange: s
 
 const VTYPES: CVType[] = ['car', 'car', 'car', 'suv', 'motorcycle', 'auto', 'bus', 'truck'];
 
-const PLATES_KA = [
-  'KA 01 AB 1234', 'KA 05 MN 7823', 'MH 12 CD 5678', 'KA 03 EF 9012',
-  'KA 51 GH 3456', 'KA 02 IJ 7890', 'TN 22 XY 4512', 'KA 19 PQ 8834',
-  'AP 28 RS 2290', 'KA 04 TU 6677', 'KA 09 VW 1122', 'DL 8C AM 4433',
+const PLATES_MH = [
+  'MH12AB1234', 'MH14CD5678', 'MH15EF9012', 'MH16GH3456',
+  'MH17JK7890', 'MH18LM2468', 'MH12AB1234', 'MH14CD5678',
+  'MH15EF9012', 'MH16GH3456', 'MH17JK7890', 'MH18LM2468',
 ];
 
 const MULTI_COLORS = ['#E5E7EB','#1E40AF','#16A34A','#7C3AED','#D97706','#374151','#0F766E','#9F1239'];

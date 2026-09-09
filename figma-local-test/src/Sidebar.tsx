@@ -78,7 +78,7 @@ export default function Sidebar({ active, onChange, user, onLogout, alertCount }
         {!collapsed && (
           <div className="overflow-hidden">
             <div className="text-white font-bold text-sm leading-tight">STMS</div>
-            <div className="text-slate-500 text-xs">Bengaluru</div>
+            <div className="text-slate-500 text-xs">Maharashtra</div>
           </div>
         )}
         <button
