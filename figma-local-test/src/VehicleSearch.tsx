@@ -336,16 +336,81 @@ export default function VehicleSearch() {
           </div>
         )}
 
+
+      {/* Real ANPR result */}
+      {anprResult && (
+        <div
+          className="rounded-xl border overflow-hidden"
+          style={{ borderColor: '#BFDBFE', background: '#FFFFFF' }}
+        >
+          <div
+            className="px-4 py-3 border-b flex items-center justify-between"
+            style={{ borderColor: '#DBEAFE', background: '#EFF6FF' }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-600" />
+              <span className="text-sm font-bold" style={{ color: '#1E3A8A' }}>
+                REAL ANPR RESULT
+              </span>
+            </div>
+            <span className="text-xs font-semibold" style={{ color: '#2563EB' }}>
+              AI Engine Online
+            </span>
+          </div>
+
+          <div className="grid grid-cols-4 gap-4 p-4">
+            <div>
+              <div className="text-xs" style={{ color: '#94A3B8' }}>Detected Plate</div>
+              <div className="mono font-bold text-base mt-1" style={{ color: '#0F172A' }}>
+                {anprResult.plate_number || '—'}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs" style={{ color: '#94A3B8' }}>Plate Detection</div>
+              <div className="font-bold text-base mt-1" style={{ color: '#0F172A' }}>
+                {(anprResult.detection_confidence * 100).toFixed(1)}%
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs" style={{ color: '#94A3B8' }}>OCR Confidence</div>
+              <div className="font-bold text-base mt-1" style={{ color: '#0F172A' }}>
+                {(anprResult.ocr_confidence * 100).toFixed(1)}%
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs" style={{ color: '#94A3B8' }}>Registry Status</div>
+              <div
+                className="font-bold text-sm mt-1"
+                style={{ color: anprResult.vehicle_found ? '#16A34A' : '#D97706' }}
+              >
+                {anprResult.vehicle_found
+                  ? 'Vehicle Found'
+                  : 'Not in Demo Registry'}
+              </div>
+            </div>
+          </div>
+
+          {anprError && (
+            <div className="px-4 pb-4 text-xs" style={{ color: '#DC2626' }}>
+              {anprError}
+            </div>
+          )}
+        </div>
+      )}
+
         {/* Not found */}
         {notFound && (
           <div className="rounded-xl p-6 text-center border" style={{ borderColor: '#E2E8F0', background: 'white' }}>
             <div className="text-4xl mb-3">🔍</div>
             <div className="font-bold text-lg" style={{ color: '#0F172A' }}>Vehicle Not Currently Detected</div>
             <div className="text-sm mt-1" style={{ color: '#64748B' }}>
-              No record found for <span className="mono font-bold">{query}</span> in the ANPR database.
+              <span className="mono font-bold">{query}</span> was detected successfully, but no matching record exists in the prototype vehicle registry.
             </div>
             <div className="mt-3 text-xs" style={{ color: '#94A3B8' }}>
-              The vehicle may be unregistered, outside camera coverage, or the plate may be incorrect.
+              The AI detection is working, but vehicle details are unavailable in the current demo registry.
             </div>
           </div>
         )}
