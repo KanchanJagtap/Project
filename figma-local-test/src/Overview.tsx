@@ -38,7 +38,10 @@ const CityMap = ({ junctions, onJunctionClick }: {
   const getJunction = (id: string) => junctions.find(j => j.id === id);
 
   return (
-    <div className="relative w-full h-full bg-white rounded-xl overflow-hidden border" style={{ borderColor: '#E2E8F0' }}>
+    <div
+      className="relative w-full h-full min-h-0 max-h-[420px] bg-white rounded-xl overflow-hidden border"
+      style={{ borderColor: '#E2E8F0' }}
+    >
       {/* Map background */}
       <div className="absolute inset-0" style={{
         background: '#F8FAFC',
@@ -351,7 +354,7 @@ export default function Overview({ onNavigate }: OverviewProps) {
   ];
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ background: '#F8FAFC' }}>
+    <div className="h-full min-h-0 flex flex-col overflow-hidden" style={{ background: '#F8FAFC' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 bg-white border-b" style={{ borderColor: '#E2E8F0' }}>
         <div>
@@ -376,7 +379,7 @@ export default function Overview({ onNavigate }: OverviewProps) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-5">
+      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5">
         {/* Stat cards */}
         <div className="grid grid-cols-6 gap-3">
           <StatCard label="Total Vehicles" value={totalVehicles.toLocaleString()} sub="Active on roads"
@@ -406,7 +409,10 @@ export default function Overview({ onNavigate }: OverviewProps) {
         </div>
 
         {/* Map + AI Insights */}
-        <div className="grid grid-cols-3 gap-5" style={{ height: 420 }}>
+        <div
+        className="grid grid-cols-3 gap-5 min-h-0 overflow-hidden"
+        style={{ height: 420, minHeight: 420, maxHeight: 420 }}
+      >
           <div className="col-span-2">
             <CityMap junctions={junctions} onJunctionClick={setSelectedJunction} />
           </div>
