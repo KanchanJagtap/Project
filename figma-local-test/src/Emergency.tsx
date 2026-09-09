@@ -553,7 +553,7 @@ function ActiveVehicleCard({ vehicle, junctions, onDeactivate }: {
         style={{ background: '#EFF6FF', borderColor: '#1D4ED8' }}>
         <div className="text-xs font-bold mb-1" style={{ color: '#1D4ED8' }}>System Override Active</div>
         <div className="text-xs" style={{ color: '#1E40AF' }}>
-          Signals along route set GREEN for emergency vehicle. Conflicting lanes forced RED.
+          Emergency priority active: route signals are coordinated GREEN, while conflicting approaches are held RED. Normal adaptive control resumes after the emergency vehicle clears each junction.
           Normal adaptive AI resumes automatically as vehicle clears each junction.
         </div>
       </div>
@@ -761,10 +761,10 @@ export default function Emergency() {
           <h3 className="text-sm font-bold mb-3" style={{ color: '#0F172A' }}>How Green Corridor Works</h3>
           <div className="grid grid-cols-4 gap-3">
             {[
-              { icon: '📡', title: 'Detection', desc: 'Vehicle detected via camera or registered manually' },
-              { icon: '🗺️', title: 'Route Calc.', desc: 'Optimal path computed, waypoints assigned with GPS tracking' },
-              { icon: '🟢', title: 'Progressive Clear', desc: 'Signals cleared ahead, restored behind as vehicle advances' },
-              { icon: '✅', title: 'Auto-Restore', desc: 'Normal AI adaptive control resumes after vehicle passes each junction' },
+              { icon: '📡', title: 'Detection', desc: 'Emergency vehicle detected via CCTV or operator input' },
+              { icon: '🗺️', title: 'Route Calc.', desc: 'AI selects the fastest feasible route through monitored junctions' },
+              { icon: '🟢', title: 'Progressive Clear', desc: 'Signals are pre-cleared ahead of the emergency vehicle' },
+              { icon: '✅', title: 'Auto-Restore', desc: 'Normal adaptive signal control resumes after the vehicle passes' },
             ].map(s => (
               <div key={s.title} className="text-center">
                 <div className="w-10 h-10 rounded-full mx-auto mb-2 flex items-center justify-center text-xl"

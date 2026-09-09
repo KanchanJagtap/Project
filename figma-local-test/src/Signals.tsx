@@ -25,12 +25,42 @@ function SignalHead({ color }: { color: 'red' | 'yellow' | 'green' }) {
   );
 }
 
-const AI_REASONS: Record<string, string> = {
-  north: 'High queue + slow speed → extending green by 12s',
-  south: 'Low density + high speed → reducing green by 8s',
-  east: 'Large vehicle blockage → extending red for safety clearance',
-  west: 'Moderate flow → maintaining standard cycle',
-};
+function getAIReason(sig: SignalArm, arm: string): string {
+  const pressure =
+    sig.vehicleDensity * 0.30 +
+    Math.min(sig.queueLength * 4, 100) * 0.25 +
+    Math.min(sig.occupancy, 100) * 0.20 +
+    Math.min(sig.waitingTime * 1.5, 100) * 0.15 +
+    Math.max(0, Math.min(100, 100 - sig.avgSpeed * 2)) * 0.10;
+
+  const label = `${arm.charAt(0).toUpperCase()}${arm.slice(1)} approach`;
+
+  if (pressure >= 75) {
+    return `${label}: high traffic pressure (${Math.round(pressure)}%) — extending green time to clear queue and reduce waiting.`;
+  }
+
+  if (sig.queueLength >= 15) {
+    return `${label}: queue of ${sig.queueLength} vehicles detected — priority given for queue clearance.`;
+  }
+
+  if (sig.waitingTime >= 45) {
+    return `${label}: average waiting time ${sig.waitingTime}s — green time adjusted to improve throughput and fairness.`;
+  }
+
+  if (sig.occupancy >= 80) {
+    return `${label}: road occupancy at ${sig.occupancy}% — adaptive control is managing saturation risk.`;
+  }
+
+  if (sig.avgSpeed < 20) {
+    return `${label}: low average speed (${sig.avgSpeed} km/h) indicates slow traffic — green time may be extended.`;
+  }
+
+  if (pressure <= 35) {
+    return `${label}: low traffic pressure (${Math.round(pressure)}%) — shorter green allocation allows other approaches to be served.`;
+  }
+
+  return `${label}: balanced traffic conditions (${Math.round(pressure)}% pressure) — maintaining adaptive cycle.`;
+}
 
 function JunctionSignalCard({
   junction, onModeChange,
@@ -178,7 +208,7 @@ function JunctionSignalCard({
                   {/* AI analysis in adaptive mode */}
                   {junction.mode === 'adaptive' && (
                     <div className="mt-2 text-xs rounded p-2" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
-                      <strong>AI:</strong> {AI_REASONS[arm]}
+                      <strong>AI:</strong> {getAIReason(sig, arm)}
                     </div>
                   )}
                 </div>
@@ -290,8 +320,8 @@ export default function Signals() {
         {/* Summary row */}
         <div className="mt-4 grid grid-cols-4 gap-3">
           {[
-            { label: 'Currently Green', value: junctions.filter(j => j.signals.north.color === 'green').length, color: '#16A34A' },
-            { label: 'Currently Red', value: junctions.filter(j => j.signals.north.color === 'red').length, color: '#DC2626' },
+            { label: 'Currently Green', value: junctions.reduce((count, j) => count + Object.values(j.signals).filter(sig => sig.color === 'green').length, 0), color: '#16A34A' },
+            { label: 'Currently Red', value: junctions.reduce((count, j) => count + Object.values(j.signals).filter(sig => sig.color === 'red').length, 0), color: '#DC2626' },
             { label: 'AI Optimizing', value: adaptiveCount, color: '#1D4ED8' },
             { label: 'Avg Cycle Time', value: '92s', color: '#D97706' },
           ].map(s => (
