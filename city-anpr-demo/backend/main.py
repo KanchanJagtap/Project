@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
 
@@ -11,6 +12,17 @@ app = FastAPI(
     title="City ANPR Demo API",
     description="AI-powered city traffic intelligence presentation prototype",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8443",
+        "http://127.0.0.1:8443",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

@@ -109,6 +109,15 @@ export default function VehicleSearch() {
   const [recentDetection, setRecentDetection] = useState<{ cam: string; junction: string; time: Date } | null>(null);
   const [liveAlert, setLiveAlert] = useState(false);
 
+  const [anprLoading, setAnprLoading] = useState(false);
+  const [anprError, setAnprError] = useState('');
+  const [anprResult, setAnprResult] = useState<{
+    plate_number: string;
+    detection_confidence: number;
+    ocr_confidence: number;
+    vehicle_found: boolean;
+  } | null>(null);
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setNotFound(false);
@@ -149,6 +158,76 @@ export default function VehicleSearch() {
     } else {
       setResult(null);
       setNotFound(true);
+    }
+  };
+
+  const handleRealANPR = async (file: File) => {
+    setAnprLoading(true);
+    setAnprError('');
+    setAnprResult(null);
+    setNotFound(false);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch(
+        'http://127.0.0.1:8000/anpr/process',
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('ANPR server returned an error.');
+      }
+
+      const data = await response.json();
+
+      if (
+        !data.detections ||
+        data.detections.length === 0
+      ) {
+        throw new Error(
+          'No license plate was detected in this image.'
+        );
+      }
+
+      const detection = data.detections[0];
+      const plateNumber = String(
+        detection.plate_number || ''
+      ).toUpperCase();
+
+      const profile = VEHICLE_DB[plateNumber];
+
+      setAnprResult({
+        plate_number: plateNumber,
+        detection_confidence:
+          Number(detection.detection_confidence || 0),
+        ocr_confidence:
+          Number(detection.ocr_confidence || 0),
+        vehicle_found:
+          Boolean(detection.vehicle_found),
+      });
+
+      if (profile) {
+        setQuery(plateNumber);
+        setResult(profile);
+        setNotFound(false);
+      } else {
+        setQuery(plateNumber);
+        setResult(null);
+        setNotFound(true);
+      }
+    } catch (error) {
+      setAnprError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to process the image.'
+      );
+    } finally {
+      setAnprLoading(false);
     }
   };
 
@@ -195,6 +274,32 @@ export default function VehicleSearch() {
             style={{ background: '#1D4ED8' }}>
             Search
           </button>
+
+        <label
+          className="px-5 py-3 rounded-xl font-semibold text-sm cursor-pointer border transition-all hover:bg-blue-50"
+          style={{
+            color: '#1D4ED8',
+            borderColor: '#BFDBFE',
+            background: '#FFFFFF',
+          }}
+        >
+          {anprLoading ? 'Scanning...' : 'Real ANPR Scan'}
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            disabled={anprLoading}
+            onChange={e => {
+              const file = e.target.files?.[0];
+
+              if (file) {
+                handleRealANPR(file);
+              }
+
+              e.currentTarget.value = '';
+            }}
+          />
+        </label>
         </form>
 
         {/* Quick access */}
