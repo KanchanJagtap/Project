@@ -1,0 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+html, body, #root {
+  height: 100%;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --navy: #0F172A;
+  --navy-800: #1E293B;
+  --navy-700: #334155;
+  --navy-600: #475569;
+  --blue-primary: #1D4ED8;
+  --blue-light: #3B82F6;
+  --blue-bg: #EFF6FF;
+  --red-alert: #DC2626;
+  --red-bg: #FEF2F2;
+  --green-ok: #16A34A;
+  --green-bg: #F0FDF4;
+  --amber-warn: #D97706;
+  --amber-bg: #FFFBEB;
+  --surface: #FFFFFF;
+  --surface-2: #F8FAFC;
+  --surface-3: #F1F5F9;
+  --border: #E2E8F0;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+}
+
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+/* CCTV scanline overlay */
+.cctv-overlay {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+}
+
+/* Signal light animations */
+@keyframes pulse-red { 0%, 100% { box-shadow: 0 0 8px rgba(220,38,38,0.6); } 50% { box-shadow: 0 0 16px rgba(220,38,38,1); } }
+@keyframes pulse-green { 0%, 100% { box-shadow: 0 0 8px rgba(22,163,74,0.6); } 50% { box-shadow: 0 0 16px rgba(22,163,74,1); } }
+@keyframes pulse-amber { 0%, 100% { box-shadow: 0 0 8px rgba(217,119,6,0.6); } 50% { box-shadow: 0 0 16px rgba(217,119,6,1); } }
+
+.signal-red { background: #DC2626; animation: pulse-red 1.5s infinite; }
+.signal-green { background: #16A34A; animation: pulse-green 1.5s infinite; }
+.signal-amber { background: #D97706; animation: pulse-amber 0.8s infinite; }
+.signal-off { background: #374151; }
+
+/* Map styles */
+.map-road { stroke: #CBD5E1; stroke-width: 8; fill: none; }
+.map-road-major { stroke: #94A3B8; stroke-width: 12; }
+.map-junction { cursor: pointer; transition: all 0.2s; }
+.map-junction:hover { filter: drop-shadow(0 0 6px rgba(29,78,216,0.5)); }
+
+/* Detection box animation */
+@keyframes scan-line { from { top: 0; } to { top: 100%; } }
+
+.blink-fast { animation: blink 0.5s infinite; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* Emergency corridor pulse */
+@keyframes corridor-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.corridor-active { animation: corridor-pulse 1s infinite; }
+
+/* Sidebar */
+.sidebar-item { transition: all 0.15s; }
+.sidebar-item:hover { background: rgba(255,255,255,0.08); }
+.sidebar-item.active { background: rgba(59,130,246,0.2); border-right: 3px solid #3B82F6; }
+
+/* Chart bars */
+@keyframes bar-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.bar-animate { animation: bar-grow 0.6s ease-out both; transform-origin: bottom; }
+
+/* Card hover */
+.stat-card { transition: all 0.2s; }
+.stat-card:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
