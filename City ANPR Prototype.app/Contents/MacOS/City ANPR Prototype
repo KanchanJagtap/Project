@@ -2,57 +2,54 @@
 
 PROJECT="/Users/rohit/Kanchan Jagtap/SIH Project"
 FRONTEND="$PROJECT/figma-local-test"
-BACKEND="$PROJECT/city-anpr-demo/backend"
+DEMO="$PROJECT/city-anpr-demo"
 LOG="$HOME/Library/Logs/city-anpr-prototype.log"
 
 mkdir -p "$(dirname "$LOG")"
 
 echo "===== City ANPR Prototype $(date) =====" >> "$LOG"
 
-# --------------------------------------------------
-# BACKEND — FastAPI on port 8000
-# --------------------------------------------------
+# -------------------------------
+# START FASTAPI BACKEND
+# -------------------------------
 
 if ! lsof -nP -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then
 
-    cd "$BACKEND" || {
-        echo "ERROR: Backend directory not found: $BACKEND" >> "$LOG"
+    cd "$DEMO" || {
+        echo "ERROR: Demo directory not found." >> "$LOG"
         exit 1
     }
 
-    if [ -x "$PROJECT/city-anpr-demo/.venv/bin/python" ]; then
-        PYTHON="$PROJECT/city-anpr-demo/.venv/bin/python"
-    elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="$DEMO/.venv/bin/python"
+
+    if [ ! -x "$PYTHON" ]; then
         PYTHON="$(command -v python3)"
-    else
-        echo "ERROR: Python not found." >> "$LOG"
-        exit 1
     fi
 
-    echo "Starting FastAPI backend..." >> "$LOG"
+    echo "Starting FastAPI..." >> "$LOG"
 
-    nohup "$PYTHON" -m uvicorn main:app \
+    nohup "$PYTHON" -m uvicorn backend.main:app \
         --host 127.0.0.1 \
         --port 8000 \
         >> "$LOG" 2>&1 &
 
 else
-    echo "FastAPI already running on port 8000." >> "$LOG"
+    echo "FastAPI already running." >> "$LOG"
 fi
 
 
-# --------------------------------------------------
-# FRONTEND — Vite on port 8443
-# --------------------------------------------------
+# -------------------------------
+# START VITE FRONTEND
+# -------------------------------
 
 if ! lsof -nP -iTCP:8443 -sTCP:LISTEN >/dev/null 2>&1; then
 
     cd "$FRONTEND" || {
-        echo "ERROR: Frontend directory not found: $FRONTEND" >> "$LOG"
+        echo "ERROR: Frontend directory not found." >> "$LOG"
         exit 1
     }
 
-    echo "Starting Vite frontend..." >> "$LOG"
+    echo "Starting Vite..." >> "$LOG"
 
     nohup npm run dev -- \
         --host 127.0.0.1 \
@@ -60,37 +57,28 @@ if ! lsof -nP -iTCP:8443 -sTCP:LISTEN >/dev/null 2>&1; then
         >> "$LOG" 2>&1 &
 
 else
-    echo "Vite already running on port 8443." >> "$LOG"
+    echo "Vite already running." >> "$LOG"
 fi
 
 
-# --------------------------------------------------
+# -------------------------------
 # WAIT FOR FRONTEND
-# --------------------------------------------------
+# -------------------------------
 
 echo "Waiting for frontend..." >> "$LOG"
 
-FRONTEND_READY=false
-
 for i in {1..30}; do
+
     if curl -s http://127.0.0.1:8443 >/dev/null 2>&1; then
-        FRONTEND_READY=true
-        break
+        echo "Frontend ready." >> "$LOG"
+        open -a "Safari" "http://127.0.0.1:8443"
+        exit 0
     fi
 
     sleep 1
 done
 
 
-# --------------------------------------------------
-# OPEN DASHBOARD
-# --------------------------------------------------
+echo "ERROR: Frontend failed to start." >> "$LOG"
 
-if [ "$FRONTEND_READY" = true ]; then
-    echo "Frontend ready. Opening Safari." >> "$LOG"
-    open -a "Safari" "http://127.0.0.1:8443"
-else
-    echo "ERROR: Frontend did not start within 30 seconds." >> "$LOG"
-fi
-
-exit 0
+exit 1
