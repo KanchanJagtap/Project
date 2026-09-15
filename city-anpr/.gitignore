@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Databases and sqlite
+*.db
+*.sqlite3
+
+# OS metadata
+.DS_Store

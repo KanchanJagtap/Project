@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: city_anpr_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-city_anpr_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-city_anpr_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-city_anpr}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-city_anpr_user} -d ${POSTGRES_DB:-city_anpr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    name: city_anpr_postgres_data
