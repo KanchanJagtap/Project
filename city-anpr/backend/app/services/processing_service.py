@@ -620,6 +620,13 @@ class ProcessingService:
                 return await self._workers[self._last_camera_id].stop()
             return await next(iter(self._workers.values())).stop()
 
+    async def stop_all(self) -> List[ProcessingStatusResponse]:
+        """Request cooperative stop for all registered camera workers."""
+        results = []
+        for worker in list(self._workers.values()):
+            results.append(await worker.stop())
+        return results
+
     # =========================================================================
     # Reset
     # =========================================================================
@@ -662,6 +669,18 @@ class ProcessingService:
         if worker is not None:
             return await worker.wait_for_completion(timeout=timeout)
         return self.get_status(camera_id=camera_id)
+
+    async def wait_for_all(
+        self, timeout: Optional[float] = None
+    ) -> List[ProcessingStatusResponse]:
+        """Wait for all registered camera workers to complete."""
+        tasks = [
+            worker.wait_for_completion(timeout=timeout)
+            for worker in list(self._workers.values())
+        ]
+        if tasks:
+            return await asyncio.gather(*tasks)
+        return []
 
     # =========================================================================
     # Backward-Compatibility Attributes for 2F Tests

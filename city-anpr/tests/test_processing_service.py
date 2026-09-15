@@ -73,13 +73,21 @@ from backend.app.services.processing_service import (
 
 def _create_dummy_frame_result(camera_id: str, frame_num: int) -> FrameResult:
     """Create a minimal valid FrameResult for test ingestion."""
+    clean_id = "".join(c for c in camera_id if c.isalnum()).upper()[-2:] or "XX"
+    plate_text = (
+        f"MH12AB{frame_num:04d}"
+        if camera_id in ("cam-snap", "cam-test-01", "cam-gc", "cam-01")
+        else f"MH12{clean_id}{frame_num:04d}"
+    )
+    tid = abs(hash((camera_id, frame_num))) % 100000 + 1
+
     return FrameResult(
         frame_number=frame_num,
         camera_id=camera_id,
         timestamp=datetime.now(timezone.utc),
         tracked_vehicle_contracts=[
             TrackedVehicle(
-                track_id=frame_num,
+                track_id=tid,
                 bbox=(10.0, 20.0, 100.0, 120.0),
                 confidence=0.92,
                 vehicle_type="car",
@@ -88,11 +96,11 @@ def _create_dummy_frame_result(camera_id: str, frame_num: int) -> FrameResult:
         ],
         plate_observations=[
             PlateObservation(
-                plate_text=f"MH12AB{frame_num:04d}",
+                plate_text=plate_text,
                 detection_confidence=0.90,
                 ocr_confidence=0.88,
                 bbox=(20.0, 30.0, 60.0, 45.0),
-                track_id=frame_num,
+                track_id=tid,
                 frame_number=frame_num,
                 camera_id=camera_id,
             )
@@ -669,10 +677,12 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
             expire_on_commit=False,
         )
         self.session_factory = TrackingSessionFactory(self.session_maker)
-        self.pipeline = MockPipeline(frames_to_yield=15, per_frame_delay=0.03)
+        # Camera-aware pipeline factory to avoid database camera_id collisions across concurrent workers
         self.mock_service = ProcessingService(
             session_factory=self.session_factory,
-            pipeline_factory=lambda **kw: self.pipeline,
+            pipeline_factory=lambda camera_id="cam-test-api", **kw: MockPipeline(
+                camera_id=camera_id, frames_to_yield=15, per_frame_delay=0.03
+            ),
         )
 
         # Override dependency
@@ -684,8 +694,8 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
             self.dummy_video = Path(__file__).resolve()
 
     async def asyncTearDown(self):
-        await self.mock_service.stop()
-        await self.mock_service.wait_for_completion(timeout=5.0)
+        await self.mock_service.stop_all()
+        await self.mock_service.wait_for_all(timeout=5.0)
         await self.client.aclose()
         await self.engine.dispose()
         app.dependency_overrides.clear()
@@ -824,8 +834,14 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Multiple cameras", res.json()["detail"])
 
         # Explicit stop for each succeeds
-        await self.client.post("/api/processing/stop", json={"camera_id": "cam-ambig-1"})
-        await self.client.post("/api/processing/stop", json={"camera_id": "cam-ambig-2"})
+        res_stop1 = await self.client.post("/api/processing/stop", json={"camera_id": "cam-ambig-1"})
+        self.assertEqual(res_stop1.status_code, 200)
+        res_stop2 = await self.client.post("/api/processing/stop", json={"camera_id": "cam-ambig-2"})
+        self.assertEqual(res_stop2.status_code, 200)
+
+        # Cleanly await completion for both cameras before test ends
+        await self.mock_service.wait_for_completion(camera_id="cam-ambig-1", timeout=5.0)
+        await self.mock_service.wait_for_completion(camera_id="cam-ambig-2", timeout=5.0)
 
 
 if __name__ == "__main__":
