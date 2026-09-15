@@ -6,6 +6,11 @@ Exports all Pydantic v2 API response and request models.
 from .camera import CameraApproachInfo, CameraResponse
 from .common import BoundingBoxSchema, ORMModel, PaginatedResponse, TimeRangeFilter
 from .junction import JunctionApproachResponse, JunctionResponse
+from .processing import (
+    ProcessingStartRequest,
+    ProcessingState,
+    ProcessingStatusResponse,
+)
 from .signal import SignalDecisionResponse
 from .traffic import TrafficSnapshotResponse
 from .vehicle import (
@@ -30,4 +35,8 @@ __all__ = [
     "VehicleHistoryResponse",
     "TrafficSnapshotResponse",
     "SignalDecisionResponse",
+    "ProcessingState",
+    "ProcessingStartRequest",
+    "ProcessingStatusResponse",
 ]
+
