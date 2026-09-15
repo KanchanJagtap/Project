@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.schemas.processing import (
     CamerasListResponse,
+    ProcessingOverviewResponse,
     ProcessingStartRequest,
     ProcessingStatusResponse,
     ProcessingStopRequest,
@@ -121,3 +122,18 @@ async def get_camera_status(
 ) -> ProcessingStatusResponse:
     """Inspect status of a specific camera processing worker."""
     return service.get_status(camera_id=camera_id)
+
+
+@router.get(
+    "/overview",
+    response_model=ProcessingOverviewResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get Processing Overview",
+    description="Inspect system-wide aggregated telemetry and active metrics across all camera feeds.",
+)
+async def get_processing_overview(
+    service: ProcessingService = Depends(get_processing_service),
+) -> ProcessingOverviewResponse:
+    """Inspect system-wide aggregated multi-camera runtime metrics."""
+    return service.get_overview()
+

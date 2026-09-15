@@ -262,6 +262,8 @@ class CameraWorker:
             self._finished_at = None
             self._error = None
             self._latest_frame = None
+            self._last_frame_processed_at = None
+            self._total_frame_processing_time_ms = 0.0
 
             self._task = asyncio.create_task(
                 self._run_worker(
@@ -304,6 +306,8 @@ class CameraWorker:
         self._finished_at = None
         self._error = None
         self._latest_frame = None
+        self._last_frame_processed_at = None
+        self._total_frame_processing_time_ms = 0.0
         self._task = None
         self._stop_event = asyncio.Event()
 
@@ -394,6 +398,9 @@ class CameraWorker:
                         raise
 
                 self._processed_frames += 1
+                self._last_frame_processed_at = datetime.now(timezone.utc)
+                if frame_result.processing_time_ms is not None:
+                    self._total_frame_processing_time_ms += float(frame_result.processing_time_ms)
 
                 # Update immutable snapshot of latest frame state
                 self._latest_frame = _build_latest_frame_snapshot(frame_result)
@@ -567,6 +574,90 @@ class ProcessingService:
     def get_camera(self, camera_id: str) -> Optional[CameraWorker]:
         """Retrieve a specific camera worker if registered."""
         return self._workers.get(camera_id)
+
+    def get_overview(self) -> ProcessingOverviewResponse:
+        """Aggregate system-wide multi-camera runtime metrics for dashboard monitoring.
+
+        Telemetry aggregation logic:
+        - total_cameras: total registered workers in self._workers.
+        - active_cameras: count in STARTING, RUNNING, STOPPING.
+        - idle_cameras: count in IDLE.
+        - stopped_cameras: count in STOPPED, COMPLETED.
+        - failed_cameras: count in FAILED.
+        - total_processed_frames: sum of processed_frames across ALL workers.
+        - aggregate_fps: sum of fps across ACTIVE workers.
+        - average_frame_latency_ms: genuine average frame processing latency across active workers
+          computed as sum(active workers' total_frame_processing_time_ms) / sum(active workers' processed_frames).
+          Returns None if no active frames have been processed yet.
+        - total_active_vehicles: sum of active workers' latest-frame active_vehicle_count.
+        - total_plates_detected: sum of active workers' latest-frame plate_observations_count.
+        - system_status:
+            'DEGRADED' if failed_cameras > 0
+            'OPTIMAL' if active_cameras > 0 and failed_cameras == 0
+            'IDLE' if active_cameras == 0 and failed_cameras == 0
+        """
+        now = datetime.now(timezone.utc)
+        total_cameras = len(self._workers)
+        active_cameras = 0
+        idle_cameras = 0
+        stopped_cameras = 0
+        failed_cameras = 0
+        total_processed_frames = 0
+        aggregate_fps = 0.0
+        active_total_time_ms = 0.0
+        active_total_frames = 0
+        total_active_vehicles = 0
+        total_plates_detected = 0
+
+        for worker in self._workers.values():
+            status = worker.get_status()
+            total_processed_frames += status.processed_frames
+
+            if status.state in (
+                ProcessingState.STARTING,
+                ProcessingState.RUNNING,
+                ProcessingState.STOPPING,
+            ):
+                active_cameras += 1
+                if status.fps is not None:
+                    aggregate_fps += status.fps
+                active_total_time_ms += worker._total_frame_processing_time_ms
+                active_total_frames += worker._processed_frames
+                if worker._latest_frame is not None:
+                    total_active_vehicles += worker._latest_frame.active_vehicle_count
+                    total_plates_detected += worker._latest_frame.plate_observations_count
+            elif status.state == ProcessingState.IDLE:
+                idle_cameras += 1
+            elif status.state in (ProcessingState.STOPPED, ProcessingState.COMPLETED):
+                stopped_cameras += 1
+            elif status.state == ProcessingState.FAILED:
+                failed_cameras += 1
+
+        avg_latency: Optional[float] = None
+        if active_total_frames > 0 and active_total_time_ms > 0:
+            avg_latency = round(active_total_time_ms / active_total_frames, 2)
+
+        if failed_cameras > 0:
+            system_status = "DEGRADED"
+        elif active_cameras > 0:
+            system_status = "OPTIMAL"
+        else:
+            system_status = "IDLE"
+
+        return ProcessingOverviewResponse(
+            total_cameras=total_cameras,
+            active_cameras=active_cameras,
+            idle_cameras=idle_cameras,
+            stopped_cameras=stopped_cameras,
+            failed_cameras=failed_cameras,
+            total_processed_frames=total_processed_frames,
+            aggregate_fps=round(aggregate_fps, 2),
+            average_frame_latency_ms=avg_latency,
+            total_active_vehicles=total_active_vehicles,
+            total_plates_detected=total_plates_detected,
+            system_status=system_status,
+            timestamp=now,
+        )
 
     # =========================================================================
     # Start Execution

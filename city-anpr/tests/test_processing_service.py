@@ -60,6 +60,7 @@ from backend.app.main import app
 from backend.app.schemas.processing import (
     CamerasListResponse,
     LatestFrameSnapshot,
+    ProcessingOverviewResponse,
     ProcessingState,
     ProcessingStatusResponse,
     ProcessingStopRequest,
@@ -604,8 +605,20 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snap.traffic_level, "LOW")
         self.assertEqual(snap.signal_green_time, 30)
         self.assertEqual(snap.signal_reason, "Normal traffic flow")
+        # 2H traffic analytics fields
+        self.assertEqual(snap.queue_length, 0)
+        self.assertEqual(snap.moving_vehicles, 1)
+        self.assertEqual(snap.stationary_vehicles, 0)
+        # 2H liveness telemetry fields
+        self.assertIsNotNone(status.last_frame_processed_at)
+        self.assertGreaterEqual(status.seconds_since_last_frame_processed, 0.0)
         self.assertGreaterEqual(status.elapsed_seconds, 0.0)
         self.assertIsNotNone(status.fps)
+
+        worker = service.get_camera("cam-snap")
+        self.assertIsNotNone(worker)
+        self.assertIsNotNone(worker.average_frame_latency_ms)
+        self.assertGreater(worker.average_frame_latency_ms, 0.0)
 
     async def test_worker_cancellation_handled_cleanly(self):
         """Task cancellation transitions worker to STOPPED."""
@@ -657,6 +670,68 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         s2 = await service.wait_for_completion(camera_id="cam-02", timeout=5.0)
         self.assertEqual(s2.state, ProcessingState.COMPLETED)
         self.assertEqual(s2.processed_frames, 3)
+
+    async def test_overview_empty_registry(self):
+        """get_overview() on empty manager returns 0 counts and IDLE status."""
+        service = ProcessingService(session_factory=self.session_factory)
+        overview = service.get_overview()
+        self.assertEqual(overview.total_cameras, 0)
+        self.assertEqual(overview.active_cameras, 0)
+        self.assertEqual(overview.idle_cameras, 0)
+        self.assertEqual(overview.stopped_cameras, 0)
+        self.assertEqual(overview.failed_cameras, 0)
+        self.assertEqual(overview.total_processed_frames, 0)
+        self.assertEqual(overview.aggregate_fps, 0.0)
+        self.assertIsNone(overview.average_frame_latency_ms)
+        self.assertEqual(overview.total_active_vehicles, 0)
+        self.assertEqual(overview.total_plates_detected, 0)
+        self.assertEqual(overview.system_status, "IDLE")
+
+    async def test_overview_active_workers_aggregation(self):
+        """get_overview() correctly aggregates runtime metrics across active workers."""
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda camera_id="cam", **kw: MockPipeline(
+                camera_id=camera_id, frames_to_yield=4, per_frame_delay=0.03
+            ),
+        )
+
+        await service.start(source=str(self.dummy_video), camera_id="cam-ov-1")
+        await service.start(source=str(self.dummy_video), camera_id="cam-ov-2")
+        await asyncio.sleep(0.06)
+
+        overview = service.get_overview()
+        self.assertEqual(overview.total_cameras, 2)
+        self.assertGreaterEqual(overview.active_cameras, 1)
+        self.assertEqual(overview.system_status, "OPTIMAL")
+
+        # Let them complete
+        await service.wait_for_all(timeout=5.0)
+        final_ov = service.get_overview()
+        self.assertEqual(final_ov.total_cameras, 2)
+        self.assertEqual(final_ov.active_cameras, 0)
+        self.assertEqual(final_ov.stopped_cameras, 2)
+        self.assertEqual(final_ov.total_processed_frames, 8)
+        self.assertEqual(final_ov.system_status, "IDLE")
+
+    async def test_overview_failed_worker_degraded(self):
+        """A failed worker results in system_status DEGRADED."""
+        class FailPipeline:
+            def process_video(self, *a, **kw):
+                raise RuntimeError("Camera feed broken")
+
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: FailPipeline(),
+        )
+
+        await service.start(source=str(self.dummy_video), camera_id="cam-fail-ov")
+        await service.wait_for_completion(camera_id="cam-fail-ov", timeout=5.0)
+
+        overview = service.get_overview()
+        self.assertEqual(overview.total_cameras, 1)
+        self.assertEqual(overview.failed_cameras, 1)
+        self.assertEqual(overview.system_status, "DEGRADED")
 
 
 class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
@@ -842,6 +917,30 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         # Cleanly await completion for both cameras before test ends
         await self.mock_service.wait_for_completion(camera_id="cam-ambig-1", timeout=5.0)
         await self.mock_service.wait_for_completion(camera_id="cam-ambig-2", timeout=5.0)
+
+    async def test_18_api_get_processing_overview(self):
+        """GET /api/processing/overview returns aggregated system telemetry."""
+        payload = {
+            "source": str(self.dummy_video),
+            "camera_id": "cam-api-ov",
+            "max_frames": 2,
+        }
+        await self.client.post("/api/processing/start", json=payload)
+
+        res = await self.client.get("/api/processing/overview")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("total_cameras", data)
+        self.assertIn("active_cameras", data)
+        self.assertIn("total_processed_frames", data)
+        self.assertIn("aggregate_fps", data)
+        self.assertIn("total_active_vehicles", data)
+        self.assertIn("total_plates_detected", data)
+        self.assertIn("system_status", data)
+        self.assertIn("timestamp", data)
+        self.assertGreaterEqual(data["total_cameras"], 1)
+
+        await self.mock_service.wait_for_completion(camera_id="cam-api-ov", timeout=5.0)
 
 
 if __name__ == "__main__":

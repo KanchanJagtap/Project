@@ -215,6 +215,20 @@ class FastAPIApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res_api.status_code, 200)
         self.assertEqual(res_api.json(), {"status": "ok"})
 
+    async def test_01b_system_health_check(self):
+        """1b. GET /api/system/health returns comprehensive system and model status."""
+        res = await self.client.get("/api/system/health")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("status", data)
+        self.assertIn("database", data)
+        self.assertIn("models", data)
+        self.assertIn("active_workers", data)
+        self.assertEqual(data["database"]["status"], "ok")
+        self.assertIsInstance(data["active_workers"], int)
+        self.assertIn(data["status"], ("healthy", "unhealthy"))
+
+
     # -------------------------------------------------------------------------
     # 2. GET /api/junctions
     # -------------------------------------------------------------------------
