@@ -69,3 +69,20 @@ class VehicleTrack(Base):
     plate_observations: Mapped[List[PlateObservationModel]] = relationship(
         "PlateObservationModel", back_populates="track"
     )
+
+    # Helper properties for API response enrichment
+    @property
+    def camera_name(self) -> Optional[str]:
+        return self.camera.name if self.camera else None
+
+    @property
+    def junction_id(self) -> Optional[str]:
+        if self.camera and self.camera.approach:
+            return self.camera.approach.junction_id
+        return None
+
+    @property
+    def junction_name(self) -> Optional[str]:
+        if self.camera and self.camera.approach and self.camera.approach.junction:
+            return self.camera.approach.junction.name
+        return None

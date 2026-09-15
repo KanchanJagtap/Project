@@ -10,6 +10,9 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.db.session import get_db
 from backend.app.models.vehicle import Vehicle
+from backend.app.models.tracking import VehicleTrack
+from backend.app.models.camera import CameraModel
+from backend.app.models.junction import JunctionApproach
 from backend.app.schemas.vehicle import (
     VehicleHistoryResponse,
     VehicleResponse,
@@ -103,7 +106,10 @@ async def get_vehicle_history(
     stmt = (
         select(Vehicle)
         .options(
-            selectinload(Vehicle.tracks),
+            selectinload(Vehicle.tracks)
+            .selectinload(VehicleTrack.camera)
+            .selectinload(CameraModel.approach)
+            .selectinload(JunctionApproach.junction),
             selectinload(Vehicle.plate_observations),
         )
         .where(Vehicle.canonical_plate_text == clean_plate)

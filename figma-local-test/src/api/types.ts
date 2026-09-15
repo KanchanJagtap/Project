@@ -39,6 +39,9 @@ export interface LatestFrameSnapshot {
 
 export interface ProcessingStatusResponse {
   camera_id: string;
+  camera_name: string | null;
+  junction_id: string | null;
+  junction_name: string | null;
   state: 'IDLE' | 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'FAILED';
   start_time: string | null;
   end_time: string | null;
@@ -73,6 +76,9 @@ export interface VehicleTrackResponse {
   track_session_id: string;
   vehicle_id: string | null;
   camera_id: string;
+  camera_name: string | null;
+  junction_id: string | null;
+  junction_name: string | null;
   local_track_id: number;
   vehicle_type: string;
   confidence: number;
@@ -93,6 +99,9 @@ export interface PlateObservationResponse {
   plate_text: string;
   raw_plate_text: string | null;
   camera_id: string;
+  camera_name: string | null;
+  junction_id: string | null;
+  junction_name: string | null;
   track_session_id: string | null;
   vehicle_id: string | null;
   frame_number: number;

@@ -136,6 +136,33 @@ class FastAPIApiTests(unittest.IsolatedAsyncioTestCase):
             session.add(track)
             await session.flush()
 
+            # 3b. Vehicle Track without Camera relationship
+            track2 = VehicleTrack(
+                track_session_id=uuid.uuid4(),
+                vehicle_id=vehicle.vehicle_id,
+                camera_id="cam-demo", # Assuming cam-demo exists but let's change junction? No, let's just make a new camera with no junction.
+                local_track_id=102,
+                vehicle_type="bus",
+                confidence=0.88,
+                first_seen_at=now,
+                last_seen_at=now,
+                first_seen_frame=1,
+                last_seen_frame=10,
+                frames_tracked=10,
+                last_bbox=[0,0,0,0],
+                type_history=["bus"],
+            )
+            # Actually, to test nullable metadata, we need a camera with no junction.
+            camera2 = CameraModel(
+                camera_id="cam-isolated",
+                source="rtsp://10.0.0.2",
+                name=None,
+            )
+            track2.camera_id = "cam-isolated"
+            session.add(camera2)
+            session.add(track2)
+            await session.flush()
+
             # 4. Plate Observation
             obs = PlateObservationModel(
                 observation_id=uuid.uuid4(),
@@ -380,9 +407,21 @@ class FastAPIApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("plate_observations", data)
 
         self.assertEqual(data["vehicle"]["canonical_plate_text"], "MH12AB1234")
-        self.assertEqual(len(data["tracks"]), 1)
-        self.assertEqual(data["tracks"][0]["camera_id"], "cam-demo")
-        self.assertEqual(data["tracks"][0]["frames_tracked"], 15)
+        
+        cam_demo_track = next((t for t in data["tracks"] if t["camera_id"] == "cam-demo"), None)
+        self.assertIsNotNone(cam_demo_track)
+        self.assertEqual(cam_demo_track["camera_name"], "North Gate Camera")
+        self.assertEqual(cam_demo_track["junction_id"], "junc-demo")
+        self.assertEqual(cam_demo_track["junction_name"], "Shivaji Nagar Chowk")
+        self.assertEqual(cam_demo_track["frames_tracked"], 15)
+        
+        # Test the isolated track (no junction, no camera name)
+        self.assertEqual(len(data["tracks"]), 2)
+        isolated_track = next((t for t in data["tracks"] if t["camera_id"] == "cam-isolated"), None)
+        self.assertIsNotNone(isolated_track)
+        self.assertIsNone(isolated_track["camera_name"])
+        self.assertIsNone(isolated_track["junction_id"])
+        self.assertIsNone(isolated_track["junction_name"])
 
         self.assertEqual(len(data["plate_observations"]), 1)
         self.assertEqual(data["plate_observations"][0]["plate_text"], "MH12AB1234")

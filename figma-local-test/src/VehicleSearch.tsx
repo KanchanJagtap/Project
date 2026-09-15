@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { VEHICLE_DB, JUNCTIONS, type VehicleProfile, type Detection } from './data';
+import { JUNCTIONS, type VehicleProfile, type Detection } from './data';
+import { api } from './api/client';
 
 const TRAJECTORY_CAMS = ['CAM-01', 'CAM-04', 'CAM-07', 'CAM-12', 'CAM-18', 'CAM-22'];
 
@@ -105,6 +106,8 @@ export default function VehicleSearch() {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<VehicleProfile | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [backendError, setBackendError] = useState(false);
   const [tracking, setTracking] = useState<Record<string, boolean>>({});
   const [recentDetection, setRecentDetection] = useState<{ cam: string; junction: string; time: Date } | null>(null);
   const [liveAlert, setLiveAlert] = useState(false);
@@ -279,47 +282,75 @@ export default function VehicleSearch() {
     };
   }, []);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performSearch = async (plateStr: string) => {
     setNotFound(false);
     setRecentDetection(null);
     setLiveAlert(false);
+    setBackendError(false);
 
-    const plate = query.trim().toUpperCase();
+    const plate = plateStr.trim().toUpperCase();
+    setQuery(plate);
 
     if (!plate) {
       setResult(null);
       setNotFound(true);
-      return;
+      return false;
     }
+
+    setIsLoading(true);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/anpr-demo');
-
-      if (response.ok) {
-        const data = await response.json();
-
-        if (data.plate_number === plate && data.vehicle) {
-          const localProfile = VEHICLE_DB[plate];
-
-          if (localProfile) {
-            setResult(localProfile);
-            return;
-          }
-        }
+      const history = await api.getVehicleHistory(plate);
+      
+      const mappedProfile: VehicleProfile = {
+        plate: history.vehicle.canonical_plate_text || plate,
+        owner: 'Not available',
+        phone: 'Not available',
+        vehicleType: (history.vehicle.canonical_vehicle_type as any) || 'car',
+        make: 'Not available',
+        model: 'Not available',
+        color: 'Not available',
+        registrationState: 'Not available',
+        registrationDate: 'Not available',
+        violations: history.vehicle.is_stolen || history.vehicle.is_wanted ? 1 : 0,
+        detections: history.tracks.map((t: any) => {
+          // Find associated plate observation if it exists (same track session)
+          const obs = history.plate_observations.find((o: any) => o.track_session_id === t.track_session_id);
+          return {
+            cameraId: t.camera_id,
+            junctionName: t.junction_name || t.camera_name || `Camera ${t.camera_id}`,
+            timestamp: new Date(t.last_seen_at),
+            first_seen_at: new Date(t.first_seen_at),
+            track_session_id: t.track_session_id,
+            local_track_id: t.local_track_id,
+            vehicle_type: t.vehicle_type,
+            plate_text: obs ? obs.plate_text : 'Unknown',
+            direction: 'N/A',
+            speed: -1,
+            confidence: Math.round(t.confidence * 100),
+          };
+        }).sort((a: any, b: any) => b.timestamp.getTime() - a.timestamp.getTime()),
+        isTracked: false,
+      };
+      
+      setResult(mappedProfile);
+      return true;
+    } catch (err: any) {
+      if (err.message && (err.message.includes('Not found') || err.message.includes('404'))) {
+        setResult(null);
+        setNotFound(true);
+      } else {
+        setBackendError(true);
       }
-    } catch {
-      // Backend unavailable — use the local prototype database below.
+      return false;
+    } finally {
+      setIsLoading(false);
     }
+  };
 
-    const profile = VEHICLE_DB[plate];
-
-    if (profile) {
-      setResult(profile);
-    } else {
-      setResult(null);
-      setNotFound(true);
-    }
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await performSearch(query);
   };
 
   const handleRealANPR = async (file: File) => {
@@ -360,7 +391,7 @@ export default function VehicleSearch() {
         detection.plate_number || ''
       ).toUpperCase();
 
-      const profile = VEHICLE_DB[plateNumber];
+      const found = await performSearch(plateNumber);
 
       setAnprResult({
         plate_number: plateNumber,
@@ -368,19 +399,8 @@ export default function VehicleSearch() {
           Number(detection.detection_confidence || 0),
         ocr_confidence:
           Number(detection.ocr_confidence || 0),
-        vehicle_found:
-          Boolean(detection.vehicle_found),
+        vehicle_found: found,
       });
-
-      if (profile) {
-        setQuery(plateNumber);
-        setResult(profile);
-        setNotFound(false);
-      } else {
-        setQuery(plateNumber);
-        setResult(null);
-        setNotFound(true);
-      }
     } catch (error) {
       setAnprError(
         error instanceof Error
@@ -784,7 +804,7 @@ export default function VehicleSearch() {
       )}
 
         {/* Not found */}
-        {notFound && (
+        {notFound && !isLoading && !backendError && (
           <div className="rounded-xl p-6 text-center border" style={{ borderColor: '#E2E8F0', background: 'white' }}>
             <div className="text-4xl mb-3">🔍</div>
             <div className="font-bold text-lg" style={{ color: '#0F172A' }}>Vehicle Not Currently Detected</div>
@@ -798,7 +818,7 @@ export default function VehicleSearch() {
         )}
 
         {/* Result */}
-        {result && (
+        {result && !isLoading && !backendError && (
           <div className="space-y-5">
             {/* Vehicle card */}
             <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: '#E2E8F0' }}>
@@ -850,19 +870,22 @@ export default function VehicleSearch() {
                       </svg>
                     </div>
                     <div className="flex-1">
-                      <div className="text-sm font-semibold" style={{ color: '#0F172A' }}>
-                        {d.junctionName}
+                      <div className="flex justify-between items-start">
+                        <div className="text-sm font-semibold" style={{ color: '#0F172A' }}>
+                          {d.junctionName}
+                        </div>
+                        <div className="mono text-xs font-semibold" style={{ color: '#1D4ED8' }}>{d.cameraId}</div>
                       </div>
-                      <div className="text-xs mt-0.5" style={{ color: '#64748B' }}>
-                        {d.direction} · Speed: {d.speed} km/h
+                      <div className="text-xs mt-1 grid grid-cols-2 gap-x-2 gap-y-1" style={{ color: '#64748B' }}>
+                        <div><span className="font-semibold">Type:</span> {(d as any).vehicle_type || 'Unknown'}</div>
+                        <div><span className="font-semibold">Plate Read:</span> {(d as any).plate_text || 'None'}</div>
+                        <div><span className="font-semibold">Track ID:</span> {(d as any).local_track_id !== undefined ? (d as any).local_track_id : 'N/A'}</div>
+                        <div><span className="font-semibold">Session:</span> {(d as any).track_session_id ? (d as any).track_session_id.substring(0, 8) : 'N/A'}...</div>
+                        <div><span className="font-semibold">First Seen:</span> {(d as any).first_seen_at ? (d as any).first_seen_at.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : 'N/A'}</div>
+                        <div><span className="font-semibold">Last Seen:</span> {d.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</div>
+                        <div>{d.direction} · {d.speed >= 0 ? `Speed: ${d.speed} km/h` : 'Speed: N/A'}</div>
+                        <div style={{ color: '#16A34A' }}>Track Conf: {d.confidence}%</div>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="mono text-xs font-semibold" style={{ color: '#1D4ED8' }}>{d.cameraId}</div>
-                      <div className="mono text-xs" style={{ color: '#94A3B8' }}>
-                        {d.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}
-                      </div>
-                      <div className="text-xs" style={{ color: '#16A34A' }}>Conf: {d.confidence}%</div>
                     </div>
                   </div>
                 ))}
@@ -906,8 +929,30 @@ export default function VehicleSearch() {
           </div>
         )}
 
+        {/* Loading state */}
+        {isLoading && (
+          <div className="rounded-xl p-10 text-center border bg-white" style={{ borderColor: '#E2E8F0' }}>
+            <div className="text-5xl mb-4 blink-fast">⏳</div>
+            <div className="font-bold text-lg mb-2" style={{ color: '#0F172A' }}>Searching...</div>
+            <div className="text-sm" style={{ color: '#64748B' }}>
+              Retrieving vehicle profile and trajectory history from the database.
+            </div>
+          </div>
+        )}
+        
+        {/* Error state */}
+        {backendError && !isLoading && (
+          <div className="rounded-xl p-10 text-center border bg-white" style={{ borderColor: '#DC2626' }}>
+            <div className="text-5xl mb-4">⚠️</div>
+            <div className="font-bold text-lg mb-2" style={{ color: '#DC2626' }}>Backend Error</div>
+            <div className="text-sm" style={{ color: '#64748B' }}>
+              Could not connect to the real PostgreSQL backend API to retrieve vehicle history.
+            </div>
+          </div>
+        )}
+
         {/* Default state */}
-        {!result && !notFound && (
+        {!result && !notFound && !isLoading && !backendError && (
           <div className="rounded-xl p-10 text-center border bg-white" style={{ borderColor: '#E2E8F0' }}>
             <div className="text-5xl mb-4">🔍</div>
             <div className="font-bold text-lg mb-2" style={{ color: '#0F172A' }}>Search Any Vehicle</div>
