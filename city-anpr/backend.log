@@ -1,0 +1,21 @@
+INFO:     Started server process [64318]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+/Users/rohit/Kanchan Jagtap/SIH Project/city-anpr/.venv/lib/python3.12/site-packages/paddle/utils/cpp_extension/extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `/Users/rohit/.paddlex/official_models/PP-OCRv6_medium_rec`.[0m
+Loading license plate detector...
+Loading PaddleOCR recognition model...
+ANPR pipeline ready.
+INFO:     127.0.0.1:53702 - "POST /api/processing/anpr_scan HTTP/1.1" 200 OK
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `/Users/rohit/.paddlex/official_models/PP-OCRv6_medium_rec`.[0m
+Loading license plate detector...
+Loading PaddleOCR recognition model...
+ANPR pipeline ready.
+INFO:     127.0.0.1:53704 - "POST /api/processing/anpr_scan HTTP/1.1" 200 OK
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `/Users/rohit/.paddlex/official_models/PP-OCRv6_medium_rec`.[0m
+Loading license plate detector...
+Loading PaddleOCR recognition model...
+ANPR pipeline ready.
+INFO:     127.0.0.1:53732 - "POST /api/processing/anpr_scan HTTP/1.1" 200 OK

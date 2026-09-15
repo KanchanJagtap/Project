@@ -333,7 +333,7 @@ export default function VehicleSearch() {
       formData.append('file', file);
 
       const response = await fetch(
-        'http://127.0.0.1:8000/anpr/process',
+        '/api/processing/anpr_scan',
         {
           method: 'POST',
           body: formData,

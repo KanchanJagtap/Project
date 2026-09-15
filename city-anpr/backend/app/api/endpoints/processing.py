@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 
 from backend.app.schemas.processing import (
     CamerasListResponse,
@@ -136,3 +136,70 @@ async def get_processing_overview(
 ) -> ProcessingOverviewResponse:
     """Inspect system-wide aggregated multi-camera runtime metrics."""
     return service.get_overview()
+
+
+import cv2
+import numpy as np
+
+@router.post(
+    "/anpr_scan",
+    status_code=status.HTTP_200_OK,
+    summary="Real ANPR Image Scan",
+    description="Process an uploaded image using the actual ANPR pipeline.",
+)
+async def process_anpr_image(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        if not contents:
+            raise ValueError("Uploaded file is empty")
+
+        image_array = np.frombuffer(contents, dtype=np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+
+        if image is None:
+            raise ValueError("Uploaded file is not a valid image")
+
+        height, width = image.shape[:2]
+
+        from ai.anpr.anpr_pipeline import ANPRPipeline
+        pipeline = ANPRPipeline()
+        results = pipeline.detect_and_read(image)
+
+        if not results:
+            return {
+                "status": "success",
+                "filename": file.filename,
+                "image_width": width,
+                "image_height": height,
+                "detection_count": 0,
+                "detections": [],
+                "mode": "real"
+            }
+
+        result = results[0]
+        x1, y1, x2, y2 = result["bbox"]
+        detection = {
+            "plate_number": result["text"],
+            "detection_confidence": result["detection_confidence"],
+            "ocr_confidence": result["ocr_confidence"],
+            "bbox": [int(x1), int(y1), int(x2), int(y2)],
+            "vehicle": None,
+            "vehicle_found": False,
+            "mode": "real",
+        }
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "image_width": width,
+            "image_height": height,
+            "detection_count": 1,
+            "detections": [detection],
+            "mode": "real",
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
