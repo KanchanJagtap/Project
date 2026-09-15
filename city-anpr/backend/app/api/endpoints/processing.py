@@ -1,17 +1,22 @@
 """
-Processing Control & Status API Endpoints (Milestone 2F).
+Processing Control & Status API Endpoints (Milestones 2F & 2G).
 
-Provides REST endpoints to trigger, halt, and monitor the video processing
-orchestration service.
+Provides REST endpoints to trigger, halt, and monitor camera video processing
+runs, supporting continuous feeds, multi-camera status inspection, and
+backward-compatible single-camera operation.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.app.schemas.processing import (
+    CamerasListResponse,
     ProcessingStartRequest,
     ProcessingStatusResponse,
+    ProcessingStopRequest,
 )
 from backend.app.services.processing_service import (
     ProcessingService,
@@ -32,7 +37,7 @@ async def start_processing(
     request: ProcessingStartRequest,
     service: ProcessingService = Depends(get_processing_service),
 ) -> ProcessingStatusResponse:
-    """Start background video processing job."""
+    """Start background video processing job for a camera."""
     try:
         return await service.start(
             source=request.source,
@@ -56,10 +61,22 @@ async def start_processing(
     description="Cooperatively halt active video processing after the current frame finishes.",
 )
 async def stop_processing(
+    payload: Optional[ProcessingStopRequest] = None,
+    camera_id: Optional[str] = Query(default=None, description="Optional camera ID to stop"),
     service: ProcessingService = Depends(get_processing_service),
 ) -> ProcessingStatusResponse:
     """Request cooperative stop of the active video processing job."""
-    return await service.stop()
+    target_camera_id = (
+        payload.camera_id if payload and payload.camera_id else None
+    ) or camera_id
+
+    try:
+        return await service.stop(camera_id=target_camera_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
 
 
 @router.get(
@@ -67,10 +84,40 @@ async def stop_processing(
     response_model=ProcessingStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Get Processing Status",
-    description="Inspect the current lifecycle state, processed-frame count, and timestamps.",
+    description="Inspect current lifecycle state, processed-frame count, timestamps, and latest frame snapshot.",
 )
 async def get_processing_status(
+    camera_id: Optional[str] = Query(default=None, description="Optional camera ID to query"),
     service: ProcessingService = Depends(get_processing_service),
 ) -> ProcessingStatusResponse:
     """Inspect active or recent processing job status."""
-    return service.get_status()
+    return service.get_status(camera_id=camera_id)
+
+
+@router.get(
+    "/cameras",
+    response_model=CamerasListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List Camera Processing Workers",
+    description="Inspect status of all registered camera processing workers and active worker count.",
+)
+async def list_camera_workers(
+    service: ProcessingService = Depends(get_processing_service),
+) -> CamerasListResponse:
+    """List all registered camera processing workers."""
+    return service.get_all_cameras()
+
+
+@router.get(
+    "/cameras/{camera_id}/status",
+    response_model=ProcessingStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get Camera Processing Status",
+    description="Inspect status of a specific camera processing worker.",
+)
+async def get_camera_status(
+    camera_id: str,
+    service: ProcessingService = Depends(get_processing_service),
+) -> ProcessingStatusResponse:
+    """Inspect status of a specific camera processing worker."""
+    return service.get_status(camera_id=camera_id)

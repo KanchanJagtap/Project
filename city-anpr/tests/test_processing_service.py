@@ -1,7 +1,7 @@
 """
-Unit and API Integration Tests for Video Processing Orchestration Service (Milestone 2F).
+Unit and API Integration Tests for Video Processing Orchestration Service (Milestones 2F & 2G).
 
-Verifies the 12 core requirements:
+Verifies the complete lifecycle and multi-camera orchestration requirements:
 1. Initial state is IDLE
 2. start() changes state appropriately (STARTING -> RUNNING)
 3. Duplicate start is rejected (RuntimeError at service level)
@@ -11,9 +11,25 @@ Verifies the 12 core requirements:
 7. Stop request is handled cleanly (cooperative stop -> STOPPING -> STOPPED)
 8. Failure is captured in status (FAILED state, error message populated)
 9. Resources are cleaned up (sessions closed, no open leaks)
-10. API status endpoint reflects service state (GET /api/processing/status)
-11. API start returns immediately without waiting for video to finish (POST /api/processing/start)
-12. API duplicate start returns HTTP 409 Conflict
+10. Deterministic generator cleanup on normal completion
+11. Deterministic generator cleanup on cooperative stop
+12. Deterministic generator cleanup on failure
+13. Task-reference race safety
+14. Source failure handled cleanly
+15. Restart after STOPPED
+16. Restart after COMPLETED
+17. Restart after FAILED
+18. Latest runtime frame snapshot inspection
+19. Worker task cancellation handling
+20. Multi-camera independent concurrent execution
+21. API status endpoint reflects service state
+22. API start returns immediately without waiting for video to finish
+23. API duplicate start returns HTTP 409 Conflict
+24. API stop endpoint initiates cooperative stop
+25. API list cameras endpoint (GET /api/processing/cameras)
+26. API get specific camera status endpoint
+27. API stop with explicit camera_id
+28. API stop ambiguous rejection (HTTP 400 when multiple cameras active)
 """
 
 from __future__ import annotations
@@ -41,8 +57,18 @@ from ai.traffic.signal_optimizer import SignalDecision
 from backend.app.api.endpoints.processing import get_processing_service
 from backend.app.db.base import Base
 from backend.app.main import app
-from backend.app.schemas.processing import ProcessingState, ProcessingStatusResponse
-from backend.app.services.processing_service import ProcessingService
+from backend.app.schemas.processing import (
+    CamerasListResponse,
+    LatestFrameSnapshot,
+    ProcessingState,
+    ProcessingStatusResponse,
+    ProcessingStopRequest,
+)
+from backend.app.services.processing_service import (
+    CameraWorker,
+    ProcessingManager,
+    ProcessingService,
+)
 
 
 def _create_dummy_frame_result(camera_id: str, frame_num: int) -> FrameResult:
@@ -90,13 +116,20 @@ def _create_dummy_frame_result(camera_id: str, frame_num: int) -> FrameResult:
                 reason="Normal traffic flow",
             )
         ],
+        processing_time_ms=25.4,
     )
 
 
 class MockPipeline:
     """Controlled mock pipeline for deterministic processing service testing."""
 
-    def __init__(self, frames_to_yield: int = 3, per_frame_delay: float = 0.0):
+    def __init__(
+        self,
+        camera_id: str = "cam-test-01",
+        frames_to_yield: int = 3,
+        per_frame_delay: float = 0.0,
+    ):
+        self.camera_id = camera_id
         self.frames_to_yield = frames_to_yield
         self.per_frame_delay = per_frame_delay
 
@@ -108,8 +141,9 @@ class MockPipeline:
         for i in range(1, total + 1):
             if self.per_frame_delay > 0:
                 import time
+
                 time.sleep(self.per_frame_delay)
-            yield _create_dummy_frame_result("cam-test-01", i)
+            yield _create_dummy_frame_result(self.camera_id, i)
 
 
 class TrackingSessionFactory:
@@ -147,7 +181,7 @@ class TrackingSessionFactory:
 
 
 class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
-    """Unit tests covering the ProcessingService lifecycle, state machine, and controls."""
+    """Unit tests covering ProcessingService and CameraWorker lifecycles, states, and controls."""
 
     async def asyncSetUp(self):
         self.engine = create_async_engine(
@@ -180,6 +214,7 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(status.started_at)
         self.assertIsNone(status.finished_at)
         self.assertIsNone(status.error)
+        self.assertIsNone(status.latest_frame)
 
     async def test_02_start_changes_state_appropriately(self):
         """2. start() changes state from IDLE to STARTING immediately."""
@@ -216,7 +251,7 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError) as ctx:
             await service.start(
                 source=str(self.dummy_video),
-                camera_id="cam-02",
+                camera_id="cam-01",
             )
         self.assertIn("already active", str(ctx.exception))
 
@@ -279,7 +314,6 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         await service.start(source=str(self.dummy_video), camera_id="cam-01")
-        # Give worker time to process at least 1 frame
         await asyncio.sleep(0.04)
 
         stop_res = await service.stop()
@@ -292,6 +326,7 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_08_failure_captured_in_status(self):
         """8. Pipeline failure is captured with FAILED state and error details."""
+
         class FailingPipeline:
             def process_video(self, *a, **kw):
                 raise RuntimeError("Simulated inference engine failure")
@@ -342,7 +377,6 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
                     for i in range(1, 3):
                         yield _create_dummy_frame_result("cam-gc", i)
 
-                # Wrap the generator so we can intercept close()
                 inner = gen()
 
                 class CloseTracker:
@@ -378,11 +412,13 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
                     try:
                         for i in range(1, 100):
                             import time
+
                             time.sleep(0.02)
                             yield _create_dummy_frame_result("cam-gs", i)
                     except GeneratorExit:
                         close_called.append("closed")
                         raise
+
                 return gen()
 
         service = ProcessingService(
@@ -410,9 +446,9 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
                     except GeneratorExit:
                         close_called.append("closed")
                         raise
+
                 return gen()
 
-        # Use a session factory that will blow up on the second frame
         call_count = [0]
         orig_factory = self.session_factory
 
@@ -446,7 +482,7 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service.get_status().state, ProcessingState.COMPLETED)
         self.assertIsNone(service._task, "Task reference should be None after completion")
 
-        # Start a second job — should succeed without issues
+        # Start a second job
         pipeline2 = MockPipeline(frames_to_yield=3)
         service._pipeline_factory = lambda **kw: pipeline2
         await service.start(source=str(self.dummy_video), camera_id="cam-02")
@@ -455,6 +491,164 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         final = await service.wait_for_completion(timeout=5.0)
         self.assertEqual(final.state, ProcessingState.COMPLETED)
         self.assertEqual(final.processed_frames, 3)
+
+    async def test_restart_after_stopped(self):
+        """Restarting a STOPPED camera creates a genuinely clean worker state."""
+        pipeline = MockPipeline(frames_to_yield=50, per_frame_delay=0.02)
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: pipeline,
+        )
+
+        # 1. Start and stop
+        await service.start(source=str(self.dummy_video), camera_id="cam-restart")
+        await asyncio.sleep(0.04)
+        await service.stop()
+        stopped_status = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(stopped_status.state, ProcessingState.STOPPED)
+        first_run_frames = stopped_status.processed_frames
+
+        # 2. Restart the same camera
+        pipeline_new = MockPipeline(frames_to_yield=3)
+        service._pipeline_factory = lambda **kw: pipeline_new
+        restart_status = await service.start(source=str(self.dummy_video), camera_id="cam-restart")
+        self.assertIn(restart_status.state, (ProcessingState.STARTING, ProcessingState.RUNNING))
+        self.assertEqual(restart_status.processed_frames, 0)
+        self.assertIsNone(restart_status.finished_at)
+
+        # 3. Completes cleanly
+        final_status = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(final_status.state, ProcessingState.COMPLETED)
+        self.assertEqual(final_status.processed_frames, 3)
+
+    async def test_restart_after_completed(self):
+        """Restarting a COMPLETED camera creates fresh counters and clean task."""
+        pipeline = MockPipeline(frames_to_yield=2)
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: pipeline,
+        )
+
+        await service.start(source=str(self.dummy_video), camera_id="cam-comp")
+        first = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(first.state, ProcessingState.COMPLETED)
+        self.assertEqual(first.processed_frames, 2)
+
+        # Restart
+        pipeline2 = MockPipeline(frames_to_yield=4)
+        service._pipeline_factory = lambda **kw: pipeline2
+        await service.start(source=str(self.dummy_video), camera_id="cam-comp")
+        second = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(second.state, ProcessingState.COMPLETED)
+        self.assertEqual(second.processed_frames, 4)
+
+    async def test_restart_after_failed(self):
+        """Restarting a FAILED camera clears the previous error and runs cleanly."""
+        class FailThenSucceed:
+            def __init__(self):
+                self.calls = 0
+
+            def process_video(self, *a, **kw):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("First run failure")
+                for i in range(1, 3):
+                    yield _create_dummy_frame_result("cam-fail", i)
+
+        pipeline = FailThenSucceed()
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: pipeline,
+        )
+
+        # Run 1 fails
+        await service.start(source=str(self.dummy_video), camera_id="cam-fail")
+        res1 = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(res1.state, ProcessingState.FAILED)
+        self.assertIsNotNone(res1.error)
+
+        # Run 2 restarts and succeeds
+        await service.start(source=str(self.dummy_video), camera_id="cam-fail")
+        res2 = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(res2.state, ProcessingState.COMPLETED)
+        self.assertIsNone(res2.error)
+        self.assertEqual(res2.processed_frames, 2)
+
+    async def test_latest_runtime_frame_snapshot(self):
+        """LatestFrameSnapshot exposes all FrameResult fields and runtime FPS."""
+        pipeline = MockPipeline(frames_to_yield=3)
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: pipeline,
+        )
+
+        await service.start(source=str(self.dummy_video), camera_id="cam-snap")
+        status = await service.wait_for_completion(timeout=5.0)
+
+        self.assertEqual(status.state, ProcessingState.COMPLETED)
+        self.assertIsNotNone(status.latest_frame)
+        snap = status.latest_frame
+        self.assertEqual(snap.frame_number, 3)
+        self.assertEqual(snap.active_vehicle_count, 1)
+        self.assertEqual(snap.plate_observations_count, 1)
+        self.assertEqual(snap.plate_texts, ["MH12AB0003"])
+        self.assertEqual(snap.traffic_pressure, 0.15)
+        self.assertEqual(snap.traffic_level, "LOW")
+        self.assertEqual(snap.signal_green_time, 30)
+        self.assertEqual(snap.signal_reason, "Normal traffic flow")
+        self.assertGreaterEqual(status.elapsed_seconds, 0.0)
+        self.assertIsNotNone(status.fps)
+
+    async def test_worker_cancellation_handled_cleanly(self):
+        """Task cancellation transitions worker to STOPPED."""
+        pipeline = MockPipeline(frames_to_yield=50, per_frame_delay=0.03)
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: pipeline,
+        )
+
+        await service.start(source=str(self.dummy_video), camera_id="cam-cancel")
+        await asyncio.sleep(0.04)
+
+        worker = service.get_camera("cam-cancel")
+        self.assertIsNotNone(worker)
+        self.assertIsNotNone(worker._task)
+        worker._task.cancel()
+
+        status = await service.wait_for_completion(camera_id="cam-cancel", timeout=5.0)
+        self.assertEqual(status.state, ProcessingState.STOPPED)
+
+    async def test_multi_camera_independent_execution(self):
+        """Two independent cameras run concurrently with isolated lifecycles."""
+        p1 = MockPipeline(camera_id="cam-01", frames_to_yield=50, per_frame_delay=0.02)
+        p2 = MockPipeline(camera_id="cam-02", frames_to_yield=3)
+
+        def multi_pipeline_factory(camera_id, **kw):
+            return p1 if camera_id == "cam-01" else p2
+
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=multi_pipeline_factory,
+        )
+
+        # Start both cameras
+        await service.start(source=str(self.dummy_video), camera_id="cam-01")
+        await service.start(source=str(self.dummy_video), camera_id="cam-02")
+
+        # Both registered in all-cameras response
+        all_cams = service.get_all_cameras()
+        self.assertEqual(len(all_cams.cameras), 2)
+        self.assertEqual(all_cams.active_count, 2)
+
+        # Stop camera 1 only
+        await service.stop(camera_id="cam-01")
+        s1 = await service.wait_for_completion(camera_id="cam-01", timeout=5.0)
+        self.assertEqual(s1.state, ProcessingState.STOPPED)
+
+        # Camera 2 completes naturally
+        s2 = await service.wait_for_completion(camera_id="cam-02", timeout=5.0)
+        self.assertEqual(s2.state, ProcessingState.COMPLETED)
+        self.assertEqual(s2.processed_frames, 3)
 
 
 class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
@@ -561,6 +755,77 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
 
         final = await self.mock_service.wait_for_completion(timeout=5.0)
         self.assertEqual(final.state, ProcessingState.STOPPED)
+
+    async def test_14_api_list_cameras(self):
+        """GET /api/processing/cameras lists all registered cameras and active count."""
+        payload = {
+            "source": str(self.dummy_video),
+            "camera_id": "cam-list-test",
+            "max_frames": 2,
+        }
+        await self.client.post("/api/processing/start", json=payload)
+
+        res = await self.client.get("/api/processing/cameras")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("cameras", data)
+        self.assertIn("active_count", data)
+        self.assertGreaterEqual(len(data["cameras"]), 1)
+
+    async def test_15_api_get_specific_camera_status(self):
+        """GET /api/processing/cameras/{camera_id}/status returns camera-specific status."""
+        payload = {
+            "source": str(self.dummy_video),
+            "camera_id": "cam-specific-status",
+            "max_frames": 2,
+        }
+        await self.client.post("/api/processing/start", json=payload)
+
+        res = await self.client.get("/api/processing/cameras/cam-specific-status/status")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["camera_id"], "cam-specific-status")
+
+    async def test_16_api_stop_with_explicit_camera_id(self):
+        """POST /api/processing/stop with explicit camera_id stops that camera."""
+        payload = {
+            "source": str(self.dummy_video),
+            "camera_id": "cam-stop-explicit",
+            "max_frames": 20,
+        }
+        await self.client.post("/api/processing/start", json=payload)
+        await asyncio.sleep(0.04)
+
+        stop_res = await self.client.post(
+            "/api/processing/stop",
+            json={"camera_id": "cam-stop-explicit"},
+        )
+        self.assertEqual(stop_res.status_code, 200)
+        self.assertIn(stop_res.json()["state"], ("STOPPING", "STOPPED"))
+
+    async def test_17_api_stop_ambiguous_rejection(self):
+        """POST /api/processing/stop without camera_id returns 400 when multiple cameras are active."""
+        p1 = {
+            "source": str(self.dummy_video),
+            "camera_id": "cam-ambig-1",
+            "max_frames": 30,
+        }
+        p2 = {
+            "source": str(self.dummy_video),
+            "camera_id": "cam-ambig-2",
+            "max_frames": 30,
+        }
+        await self.client.post("/api/processing/start", json=p1)
+        await self.client.post("/api/processing/start", json=p2)
+
+        # Ambiguous stop without camera_id
+        res = await self.client.post("/api/processing/stop")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Multiple cameras", res.json()["detail"])
+
+        # Explicit stop for each succeeds
+        await self.client.post("/api/processing/stop", json={"camera_id": "cam-ambig-1"})
+        await self.client.post("/api/processing/stop", json={"camera_id": "cam-ambig-2"})
 
 
 if __name__ == "__main__":
