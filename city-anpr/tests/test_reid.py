@@ -98,3 +98,93 @@ def test_15_graceful_model_failure():
     result = service.extract_evidence(img, (10.0, 10.0, 50.0, 50.0))
     # Encoder raises NotImplementedError, service catches it and returns None
     assert result is None
+
+def test_16_real_encoder_smoke():
+    import os
+    import cv2
+    from ai.reid.onnx_encoder import ONNXAppearanceEncoder
+    
+    # 10.A. Skip gracefully when the model file is absent in CI
+    model_path = os.environ.get("REID_MODEL_PATH", "vehicle_vit_clip_reid.onnx")
+    if not os.path.exists(model_path):
+        pytest.skip(f"Model {model_path} not found. Skipping real inference tests.")
+        
+    # 10.B. Model loads successfully when present
+    encoder = ONNXAppearanceEncoder(model_path)
+    
+    # Load actual project vehicle crop
+    img = cv2.imread('data/test/indian-plates/images/image_0032.jpg')
+    if img is None:
+        pytest.skip("Test image not found.")
+        
+    # Fake a bbox that captures the center of the image
+    h, w = img.shape[:2]
+    bbox = (float(w//4), float(h//4), float(w*3//4), float(h*3//4))
+    
+    # Extract crop using ai/reid/crop.py to validate the pipeline
+    from ai.reid.crop import extract_vehicle_crop
+    crop = extract_vehicle_crop(img, bbox)
+    
+    # 10.C. Input crop is accepted
+    emb1 = encoder.encode(crop)
+    
+    assert emb1 is not None
+    # 10.D. Output dimension is exactly 512
+    assert emb1.dimension == 512
+    # 10.E. Output values are finite, 10.F. Output is non-zero
+    assert np.isfinite(emb1.vector).all()
+    assert np.any(np.array(emb1.vector) != 0)
+    
+    # 10.G. L2-normalized output norm is approximately 1
+    norm = np.linalg.norm(emb1.vector)
+    assert pytest.approx(norm, 0.001) == 1.0
+    
+    # 10.H. Same crop produces deterministic/near-identical embedding
+    emb2 = encoder.encode(crop)
+    np.testing.assert_array_almost_equal(emb1.vector, emb2.vector, decimal=5)
+    
+    # 10.I. Two genuinely different vehicle crops produce different embeddings
+    img2 = cv2.imread('data/test/indian-plates/images/image_0027.jpg')
+    if img2 is not None:
+        crop2 = extract_vehicle_crop(img2, bbox)
+        emb3 = encoder.encode(crop2)
+        assert not np.allclose(emb1.vector, emb3.vector, atol=1e-3)
+        
+        # 10.M. Cosine similarity works with resulting normalized embeddings
+        from ai.reid.similarity import cosine_similarity
+        sim_diff = cosine_similarity(emb1, emb3)
+        assert sim_diff < 1.0
+        
+        sim_same = cosine_similarity(emb1, emb2)
+        assert pytest.approx(sim_same, 0.001) == 1.0
+        
+    # 10.J. Invalid/too-small crop is rejected cleanly
+    invalid_crop = np.zeros((10, 10, 3), dtype=np.uint8)
+    assert encoder.encode(invalid_crop) is None
+
+def test_17_reid_service_real_integration():
+    import os
+    import cv2
+    
+    model_path = os.environ.get("REID_MODEL_PATH", "vehicle_vit_clip_reid.onnx")
+    if not os.path.exists(model_path):
+        pytest.skip(f"Model {model_path} not found.")
+        
+    from ai.reid.service import ReIDService
+    service = ReIDService()
+    
+    # Ensure it didn't fallback to NotImplemented
+    from ai.reid.onnx_encoder import ONNXAppearanceEncoder
+    assert isinstance(service.encoder, ONNXAppearanceEncoder)
+    
+    img = cv2.imread('data/test/indian-plates/images/image_0032.jpg')
+    if img is None:
+        pytest.skip("Test image not found.")
+        
+    h, w = img.shape[:2]
+    bbox = (float(w//4), float(h//4), float(w*3//4), float(h*3//4))
+    
+    # 10.L. ReIDService successfully returns embedding
+    emb = service.extract_evidence(img, bbox)
+    assert emb is not None
+    assert emb.dimension == 512
