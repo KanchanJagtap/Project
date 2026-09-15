@@ -80,6 +80,20 @@ class Detection:
         self.confidence = _validate_confidence(self.confidence)
 
 
+
+@dataclass
+class AppearanceEmbedding:
+    vector: List[float]
+    model_name: str
+    dimension: int
+    quality_score: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.dimension <= 0:
+            raise ValueError("dimension must be positive")
+        if len(self.vector) != self.dimension:
+            raise ValueError(f"vector length {len(self.vector)} must match dimension {self.dimension}")
+
 @dataclass
 class TrackedVehicle:
     """The current state and trajectory of a persistent vehicle track."""
@@ -98,6 +112,7 @@ class TrackedVehicle:
     best_confidence: Optional[float] = None
     center: Optional[Point] = None
     type_history: List[VehicleType] = field(default_factory=list)
+    appearance_embedding: Optional[AppearanceEmbedding] = None
 
     def __post_init__(self) -> None:
         self.vehicle_type = _validate_vehicle_type(self.vehicle_type)  # type: ignore[assignment]

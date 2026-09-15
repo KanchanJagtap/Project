@@ -13,6 +13,7 @@ from backend.app.api.endpoints import (
     system,
     traffic,
     vehicles,
+    topology,
 )
 
 api_router = APIRouter()
@@ -24,6 +25,7 @@ api_router.include_router(traffic.router, prefix="/traffic", tags=["Traffic"])
 api_router.include_router(signals.router, prefix="/signals", tags=["Signals"])
 api_router.include_router(processing.router, prefix="/processing", tags=["Processing"])
 api_router.include_router(system.router, prefix="/system", tags=["System"])
+api_router.include_router(topology.router, prefix="/topology", tags=["Topology"])
 
 
 

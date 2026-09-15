@@ -50,3 +50,5 @@ __all__ = [
     "ComponentHealth",
     "SystemHealthResponse",
 ]
+from .topology import TopologyEdgeResponse
+__all__.append("TopologyEdgeResponse")

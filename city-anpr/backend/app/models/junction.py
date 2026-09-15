@@ -14,6 +14,7 @@ from backend.app.db.base import Base, utc_now
 if TYPE_CHECKING:
     from .camera import CameraModel
     from .signal import SignalDecisionModel
+    from .topology import TopologyEdge
 
 
 class Junction(Base):
@@ -47,6 +48,18 @@ class Junction(Base):
     signal_decisions: Mapped[List[SignalDecisionModel]] = relationship(
         "SignalDecisionModel",
         back_populates="junction",
+        cascade="all, delete-orphan",
+    )
+    outgoing_edges: Mapped[List[TopologyEdge]] = relationship(
+        "TopologyEdge",
+        foreign_keys="[TopologyEdge.source_junction_id]",
+        back_populates="source_junction",
+        cascade="all, delete-orphan",
+    )
+    incoming_edges: Mapped[List[TopologyEdge]] = relationship(
+        "TopologyEdge",
+        foreign_keys="[TopologyEdge.target_junction_id]",
+        back_populates="target_junction",
         cascade="all, delete-orphan",
     )
 

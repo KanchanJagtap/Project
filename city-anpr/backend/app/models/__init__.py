@@ -9,6 +9,7 @@ from .observation import PlateObservationModel
 from .signal import SignalDecisionModel
 from .tracking import VehicleTrack
 from .traffic import TrafficSnapshotModel
+from .topology import TopologyEdge
 from .vehicle import Vehicle
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "PlateObservationModel",
     "TrafficSnapshotModel",
     "SignalDecisionModel",
+    "TopologyEdge",
 ]
