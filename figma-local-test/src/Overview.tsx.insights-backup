@@ -346,11 +346,11 @@ export default function Overview({ onNavigate }: OverviewProps) {
   const emergencyActive = EMERGENCY_VEHICLES.filter(e => e.corridorActive).length;
 
   const aiInsights = [
-    { icon: '🔴', text: 'Shivajinagar Junction: High congestion detected on the north approach — AI extending green time for queue clearance.', time: '1m ago', severity: 'critical' },
-    { icon: '🟡', text: 'Hadapsar Junction: Traffic pressure rising on the east approach — adaptive signal mode recommended.', time: '3m ago', severity: 'high' },
-    { icon: '🟢', text: 'Swargate Junction: Signal optimization reduced average waiting pressure during the current cycle.', time: '5m ago', severity: 'info' },
-    { icon: '🔴', text: 'Sion Junction: Heavy traffic pressure detected — adaptive control is preparing additional green time.', time: '7m ago', severity: 'high' },
-    { icon: '🟡', text: 'CBS Junction: Queue forming on the south approach — AI recommending a lane-specific green extension.', time: '9m ago', severity: 'medium' },
+    { icon: '🔴', text: 'Silk Board Junction: Critical congestion. Truck blocking westbound — AI extending green by 15s.', time: '1m ago', severity: 'critical' },
+    { icon: '🟡', text: 'Electronic City Junction: IT park shift change surge predicted. Recommend adaptive mode.', time: '3m ago', severity: 'high' },
+    { icon: '🟢', text: 'Hebbal Junction: Signal optimization saved avg 8.2s wait time per vehicle this hour.', time: '5m ago', severity: 'info' },
+    { icon: '🔴', text: 'MG Road: Heavy congestion predicted in 10 minutes due to evening rush hour — pre-adjusting signals.', time: '7m ago', severity: 'high' },
+    { icon: '🟡', text: 'Koramangala Junction: Queue forming on east approach. Recommending lane-specific green extension.', time: '9m ago', severity: 'medium' },
   ];
 
   return (

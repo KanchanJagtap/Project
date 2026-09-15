@@ -161,6 +161,13 @@ export default function VehicleSearch() {
 
       cameraStreamRef.current = stream;
       setCameraOpen(true);
+
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      });
     } catch (error) {
       console.error('Camera access error:', error);
 
@@ -171,38 +178,6 @@ export default function VehicleSearch() {
       setCameraOpen(true);
     }
   };
-
-  useEffect(() => {
-    if (!cameraOpen) return;
-
-    const video = videoRef.current;
-    const stream = cameraStreamRef.current;
-
-    if (!video || !stream) return;
-
-    video.srcObject = stream;
-    video.muted = true;
-    video.autoplay = true;
-    video.playsInline = true;
-
-    const startPlayback = async () => {
-      try {
-        await video.play();
-      } catch (error) {
-        console.warn('Camera playback could not start automatically:', error);
-      }
-    };
-
-    if (video.readyState >= 1) {
-      startPlayback();
-    } else {
-      video.onloadedmetadata = startPlayback;
-    }
-
-    return () => {
-      video.onloadedmetadata = null;
-    };
-  }, [cameraOpen]);
 
   const handleMediaSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
