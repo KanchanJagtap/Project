@@ -7,9 +7,12 @@ from .camera import CameraApproachInfo, CameraResponse
 from .common import BoundingBoxSchema, ORMModel, PaginatedResponse, TimeRangeFilter
 from .junction import JunctionApproachResponse, JunctionResponse
 from .processing import (
+    CamerasListResponse,
+    LatestFrameSnapshot,
     ProcessingStartRequest,
     ProcessingState,
     ProcessingStatusResponse,
+    ProcessingStopRequest,
 )
 from .signal import SignalDecisionResponse
 from .traffic import TrafficSnapshotResponse
@@ -37,5 +40,8 @@ __all__ = [
     "SignalDecisionResponse",
     "ProcessingState",
     "ProcessingStartRequest",
+    "ProcessingStopRequest",
     "ProcessingStatusResponse",
+    "LatestFrameSnapshot",
+    "CamerasListResponse",
 ]
