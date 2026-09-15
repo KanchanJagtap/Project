@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react';
+import { api } from './api/client';
+import { usePolling } from './hooks/usePolling';
+
 import { JUNCTIONS, INCIDENTS, VIOLATIONS, EMERGENCY_VEHICLES, congestionColor, type Junction } from './data';
 
 interface OverviewProps {
@@ -314,6 +317,9 @@ const JunctionModal = ({ junction, onClose, onNavigate }: {
 };
 
 export default function Overview({ onNavigate }: OverviewProps) {
+  const { data: health, error: healthErr } = usePolling(() => api.getSystemHealth(), 15000);
+  const { data: overview, error: overviewErr } = usePolling(() => api.getProcessingOverview(), 5000);
+
   const [junctions, setJunctions] = useState(JUNCTIONS);
   const [selectedJunction, setSelectedJunction] = useState<Junction | null>(null);
   const [tick, setTick] = useState(0);
@@ -380,7 +386,16 @@ export default function Overview({ onNavigate }: OverviewProps) {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5">
-        {/* Stat cards */}
+        {/* System & Processing Telemetry */}
+        <div className="grid grid-cols-5 gap-3 mb-5">
+          <StatCard label="System Status" value={health?.status === 'healthy' && !overviewErr ? 'Healthy' : 'Degraded'} sub={healthErr || overviewErr ? 'API Offline' : 'Connected'} color={health?.status === 'healthy' && !overviewErr ? '#16A34A' : '#DC2626'} icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>} />
+          <StatCard label="Active Cameras" value={overview?.active_cameras ?? 0} sub={`of ${overview?.total_cameras ?? 0} total`} color="#1D4ED8" icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="2" width="20" height="20" rx="2.5" ry="2.5"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>} />
+          <StatCard label="Active Vehicles" value={(overview?.total_active_vehicles ?? 0).toLocaleString()} sub={`${(overview?.total_plates_detected ?? 0).toLocaleString()} plates detected`} color="#7C3AED" icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 3v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>} />
+          <StatCard label="Frames Processed" value={(overview?.total_processed_frames ?? 0).toLocaleString()} sub={`${overview?.aggregate_fps?.toFixed(1) ?? 0} FPS`} color="#EA580C" icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="2" width="20" height="20" rx="2.5" ry="2.5"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>} />
+          <StatCard label="Avg Latency" value={overview?.average_frame_latency_ms ? `${overview.average_frame_latency_ms.toFixed(1)} ms` : 'N/A'} sub="inference delay" color="#D97706" icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} />
+        </div>
+
+        {/* Legacy Mock Stat cards */}
         <div className="grid grid-cols-6 gap-3">
           <StatCard label="Total Vehicles" value={totalVehicles.toLocaleString()} sub="Active on roads"
             color="#1D4ED8"

@@ -1,4 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { api } from './api/client';
+import { CamerasListResponse, ProcessingStatusResponse } from './api/types';
+import { usePolling } from './hooks/usePolling';
+
 import { JUNCTIONS, type Junction, type SignalArm } from './data';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -783,10 +787,11 @@ const DIR_LABELS = ['North Lane', 'South Lane', 'East Lane', 'West Lane'] as con
 type DirLabel = typeof DIR_LABELS[number];
 const DIR_ARMS: ArmDir[] = ['north', 'south', 'east', 'west'];
 
-function CameraCard({ junction, cardIndex, onJunctionView }: {
+function CameraCard({ junction, cardIndex, onJunctionView, camData }: {
   junction: Junction;
   cardIndex: number;
   onJunctionView: (j: Junction) => void;
+  camData?: CamerasListResponse | null;
 }) {
   const [activeDir, setActiveDir] = useState<DirLabel>('North Lane');
   const [detections, setDetections] = useState<CanvasVehicle[]>([]);
@@ -1089,6 +1094,8 @@ function JunctionView({ junction, onBack }: { junction: Junction; onBack: () => 
 // ─── Live Feed Main ───────────────────────────────────────────────────────────
 
 export default function LiveFeed({ initialJunctionId }: { initialJunctionId?: string }) {
+  const { data: camData } = usePolling(() => api.getCamerasList(), 2000);
+
   const [junctionView, setJunctionView] = useState<Junction | null>(
     initialJunctionId ? JUNCTIONS.find(j => j.id === initialJunctionId) || null : null
   );
@@ -1148,6 +1155,7 @@ export default function LiveFeed({ initialJunctionId }: { initialJunctionId?: st
               junction={junction}
               cardIndex={page * perPage + i}
               onJunctionView={setJunctionView}
+              camData={camData}
             />
           ))}
         </div>
