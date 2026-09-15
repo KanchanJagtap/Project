@@ -154,54 +154,48 @@ class IngestionService:
         plate_text: Optional[str],
         vehicle_type: str = "car",
         timestamp: Optional[datetime] = None,
-    ) -> Vehicle:
+    ) -> Optional[Vehicle]:
         """
         Resolve an existing canonical Vehicle record or create a new one.
 
         Rules:
         - If plate_text is non-empty and matches an existing canonical vehicle,
           return that vehicle and update its metadata.
-        - If plate_text is non-empty but unknown, create a new canonical Vehicle.
-        - If plate_text is None/empty, create a canonical Vehicle with
-          canonical_plate_text=None (valid under partial unique index).
+        - If plate_text is non-empty but unknown, create a new canonical Vehicle
+          with the resolved vehicle_type.
+        - If plate_text is None/empty, do NOT manufacture an anonymous canonical Vehicle.
+          Return None.
         """
+        if not plate_text or not plate_text.strip():
+            return None
+
         ts = timestamp or datetime.now(timezone.utc)
-        normalized_plate = plate_text.strip().upper() if plate_text else None
+        normalized_plate = plate_text.strip().upper()
 
-        if normalized_plate:
-            stmt = select(Vehicle).where(Vehicle.canonical_plate_text == normalized_plate)
-            res = await self.session.execute(stmt)
-            existing = res.scalars().first()
+        stmt = select(Vehicle).where(Vehicle.canonical_plate_text == normalized_plate)
+        res = await self.session.execute(stmt)
+        existing = res.scalars().first()
 
-            if existing is not None:
-                # Update last seen and detection counts
-                existing.last_detected_at = max(existing.last_detected_at, ts)
-                existing.total_detections_count += 1
-                return existing
+        if existing is not None:
+            # Update last seen and detection counts
+            existing.last_detected_at = max(existing.last_detected_at, ts)
+            existing.total_detections_count += 1
+            # Refine vehicle type if existing was generic "car" and new observation is specific
+            if vehicle_type and vehicle_type != "car" and existing.canonical_vehicle_type == "car":
+                existing.canonical_vehicle_type = vehicle_type
+            return existing
 
-            # Create new vehicle with known plate
-            new_vehicle = Vehicle(
-                canonical_plate_text=normalized_plate,
-                canonical_vehicle_type=vehicle_type,
-                first_detected_at=ts,
-                last_detected_at=ts,
-                total_detections_count=1,
-            )
-            self.session.add(new_vehicle)
-            await self.session.flush()
-            return new_vehicle
-
-        # Unidentified vehicle (no plate)
-        anonymous_vehicle = Vehicle(
-            canonical_plate_text=None,
-            canonical_vehicle_type=vehicle_type,
+        # Create new vehicle with known plate and detected vehicle classification
+        new_vehicle = Vehicle(
+            canonical_plate_text=normalized_plate,
+            canonical_vehicle_type=vehicle_type or "car",
             first_detected_at=ts,
             last_detected_at=ts,
             total_detections_count=1,
         )
-        self.session.add(anonymous_vehicle)
+        self.session.add(new_vehicle)
         await self.session.flush()
-        return anonymous_vehicle
+        return new_vehicle
 
     # =========================================================================
     # 3. Tracked Vehicles Ingestion (Idempotent Update/Create)
@@ -312,28 +306,33 @@ class IngestionService:
                 persisted.append(existing_obs)
                 continue
 
-            # Resolve or create canonical Vehicle
-            canonical_vehicle = await self.resolve_or_create_vehicle(
-                plate_text=plate_text,
-                vehicle_type="car",
-                timestamp=obs.timestamp,
-            )
-
-            # Determine associated track
+            # Determine associated track and vehicle type
             associated_track: Optional[VehicleTrack] = None
+            resolved_vehicle_type = "car"
             if obs.track_id is not None:
                 tid = int(obs.track_id) if str(obs.track_id).isdigit() else None
                 if tid is not None and tid in track_map:
                     associated_track = track_map[tid]
-                    # Link track to canonical vehicle if not already linked
-                    if associated_track.vehicle_id is None:
-                        associated_track.vehicle_id = canonical_vehicle.vehicle_id
+                    if associated_track.vehicle_type:
+                        resolved_vehicle_type = associated_track.vehicle_type
+
+            # Resolve or create canonical Vehicle using associated track's vehicle type
+            canonical_vehicle = await self.resolve_or_create_vehicle(
+                plate_text=plate_text,
+                vehicle_type=resolved_vehicle_type,
+                timestamp=obs.timestamp,
+            )
+
+            # Link track to canonical vehicle if not already linked
+            if associated_track is not None and canonical_vehicle is not None:
+                if associated_track.vehicle_id is None:
+                    associated_track.vehicle_id = canonical_vehicle.vehicle_id
 
             obs_model = plate_observation_to_model(
                 obs,
                 camera_id=camera_id,
                 track_session_id=associated_track.track_session_id if associated_track else None,
-                vehicle_id=canonical_vehicle.vehicle_id,
+                vehicle_id=canonical_vehicle.vehicle_id if canonical_vehicle else None,
             )
             self.session.add(obs_model)
             persisted.append(obs_model)
