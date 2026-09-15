@@ -29,10 +29,10 @@ Design rules enforced here
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 import cv2
@@ -41,7 +41,6 @@ from ai.anpr.anpr_pipeline import ANPRPipeline
 from ai.contracts.adapters import tracked_vehicle_from_dict
 from ai.contracts.association import associate_plates_to_vehicles
 from ai.contracts.models import (
-    Camera,
     PlateObservation,
     TrafficSnapshot,
     TrackedVehicle,
@@ -49,6 +48,8 @@ from ai.contracts.models import (
 from ai.tracking.vehicle_tracker import VehicleTracker
 from ai.traffic.signal_optimizer import ApproachState, SignalDecision, SignalOptimizer
 from ai.traffic.traffic_pressure import TrafficPressureEngine
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +219,6 @@ class SingleCameraPipeline:
         tracking_stream = self._tracker.track_video(video_path)
 
         frame_number = 0
-        last_frame: Optional[Any] = None  # keep the last numpy frame for ANPR
 
         for yolo_result in tracking_stream:
             frame_number += 1
@@ -240,8 +240,8 @@ class SingleCameraPipeline:
             # ----------------------------------------------------------
             # 2. ANPR — detect plates in the full frame
             # ----------------------------------------------------------
-            run_anpr = (frame_number % self.anpr_every_n_frames == 1) or (
-                self.anpr_every_n_frames == 1
+            run_anpr = (frame_number == 1) or (
+                frame_number % self.anpr_every_n_frames == 0
             )
 
             raw_plates: List[Dict[str, Any]] = []
@@ -249,33 +249,9 @@ class SingleCameraPipeline:
                 raw_plates = self._anpr.detect_and_read(frame)
 
             # ----------------------------------------------------------
-            # 3. Convert tracking history → TrackedVehicle contracts
-            #    (history is kept current by TrafficPressureEngine below,
-            #    but we need it for association; do a lightweight update
-            #    of the history dict right here for frame-aligned data)
-            # ----------------------------------------------------------
-            self._pressure_engine.update_vehicle_history(
-                self._vehicle_history, active_vehicles, frame_number
-            )
-
-            tracked_contracts = self._build_tracked_contracts(frame_number)
-
-            # ----------------------------------------------------------
-            # 4. Build PlateObservation objects and associate to tracks
-            # ----------------------------------------------------------
-            plate_obs_raw = self._build_plate_observations(
-                raw_plates, frame_number
-            )
-            associated_plates = associate_plates_to_vehicles(
-                vehicles=tracked_contracts,
-                plates=plate_obs_raw,
-            )
-
-            # ----------------------------------------------------------
-            # 5. TrafficPressureEngine — queue + pressure
-            #    NOTE: update_vehicle_history was already called above;
-            #    calculate_pressure will call it again internally, which
-            #    is idempotent (same frame / same vehicles).
+            # 3. TrafficPressureEngine — queue + pressure
+            #    calculate_pressure() is the sole owner/caller of
+            #    update_vehicle_history().
             # ----------------------------------------------------------
             pressure_result = self._pressure_engine.calculate_pressure(
                 active_vehicles=active_vehicles,
@@ -284,6 +260,24 @@ class SingleCameraPipeline:
                 fps=fps,
                 frame_width=frame_width,
                 frame_height=frame_height,
+            )
+
+            # ----------------------------------------------------------
+            # 4. Convert tracking history → TrackedVehicle contracts
+            #    Built from the authoritative vehicle history updated
+            #    by calculate_pressure().
+            # ----------------------------------------------------------
+            tracked_contracts = self._build_tracked_contracts(frame_number)
+
+            # ----------------------------------------------------------
+            # 5. Build PlateObservation objects and associate to tracks
+            # ----------------------------------------------------------
+            plate_obs_raw = self._build_plate_observations(
+                raw_plates, frame_number
+            )
+            associated_plates = associate_plates_to_vehicles(
+                vehicles=tracked_contracts,
+                plates=plate_obs_raw,
             )
 
             # ----------------------------------------------------------
@@ -296,6 +290,12 @@ class SingleCameraPipeline:
             # ----------------------------------------------------------
             approach = self._build_approach_state(pressure_result, frame_number, fps)
             signal_decisions = self._signal_optimizer.optimize([approach])
+
+            # Update starvation tracking based on decision
+            if signal_decisions:
+                decision = signal_decisions[0]
+                if decision.approach_id == self.approach_id and decision.green_time > 0:
+                    self._last_green_frame = frame_number
 
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -324,25 +324,28 @@ class SingleCameraPipeline:
         self,
         frame,  # numpy ndarray BGR
         frame_number: int,
-        fps: float,
-        frame_width: int,
-        frame_height: int,
+        fps: float = 30.0,
+        frame_width: Optional[int] = None,
+        frame_height: Optional[int] = None,
     ) -> FrameResult:
         """
-        Process a single pre-decoded frame.
+        Process a single pre-decoded frame in detection-only mode.
 
-        This path is intended for the future FastAPI streaming endpoint
-        where frames arrive individually (e.g., from RTSP or WebSocket).
-        The caller is responsible for providing correct metadata.
+        Because ByteTrack requires a continuous temporal stream, isolated
+        single frames cannot maintain persistent tracking IDs or trajectory
+        history. This method performs vehicle and license plate detection
+        without updating persistent tracking history or calculating
+        history-dependent traffic analytics (queue, pressure, signal optimization).
 
         Returns
         -------
         FrameResult
+            Contains active vehicle detections and plate observations without
+            synthetic track IDs or trajectory-dependent snapshots.
         """
         t0 = time.perf_counter()
 
-        # Run YOLO detection (no tracking persistence across calls in
-        # this path — use process_video for full ByteTrack persistence).
+        # Run YOLO detection without persistent ByteTrack tracking.
         raw_yolo = self._tracker.model(frame, verbose=False)
 
         active_vehicles: List[Dict[str, Any]] = []
@@ -356,46 +359,17 @@ class SingleCameraPipeline:
                 vehicle_type = self._tracker.VEHICLE_CLASSES[class_id]
                 confidence = float(result.boxes.conf[idx])
                 x1, y1, x2, y2 = map(int, result.boxes.xyxy[idx].tolist())
-                center = [int((x1 + x2) / 2), int((y1 + y2) / 2)]
-                # No ByteTrack ID in single-frame mode; use a synthetic ID.
-                synthetic_id = hash((x1, y1, x2, y2, frame_number)) % (10**6)
                 active_vehicles.append(
                     {
-                        "id": synthetic_id,
+                        "id": None,
                         "type": vehicle_type,
                         "confidence": confidence,
                         "bbox": [x1, y1, x2, y2],
-                        "center": center,
-                        "trajectory": [center],
-                        "first_seen": frame_number,
-                        "last_seen": frame_number,
-                        "frames_tracked": 1,
-                        "best_confidence": confidence,
-                        "type_history": [vehicle_type],
                     }
                 )
 
         raw_plates = self._anpr.detect_and_read(frame)
-        self._pressure_engine.update_vehicle_history(
-            self._vehicle_history, active_vehicles, frame_number
-        )
-        tracked_contracts = self._build_tracked_contracts(frame_number)
         plate_obs_raw = self._build_plate_observations(raw_plates, frame_number)
-        associated_plates = associate_plates_to_vehicles(
-            vehicles=tracked_contracts,
-            plates=plate_obs_raw,
-        )
-        pressure_result = self._pressure_engine.calculate_pressure(
-            active_vehicles=active_vehicles,
-            vehicle_history=self._vehicle_history,
-            current_frame=frame_number,
-            fps=fps,
-            frame_width=frame_width,
-            frame_height=frame_height,
-        )
-        snapshot = self._build_snapshot(pressure_result, frame_number)
-        approach = self._build_approach_state(pressure_result, frame_number, fps)
-        signal_decisions = self._signal_optimizer.optimize([approach])
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -403,10 +377,10 @@ class SingleCameraPipeline:
             frame_number=frame_number,
             camera_id=self.camera_id,
             active_vehicles=active_vehicles,
-            tracked_vehicle_contracts=tracked_contracts,
-            plate_observations=associated_plates,
-            snapshot=snapshot,
-            signal_decisions=signal_decisions,
+            tracked_vehicle_contracts=[],
+            plate_observations=plate_obs_raw,
+            snapshot=None,
+            signal_decisions=[],
             processing_time_ms=round(elapsed_ms, 1),
             anpr_skipped=False,
         )
@@ -422,16 +396,10 @@ class SingleCameraPipeline:
     ) -> List[Dict[str, Any]]:
         """
         Convert one YOLO+ByteTrack result into the dict list expected by
-        TrafficPressureEngine.calculate_pressure() and
-        TrafficPressureEngine.update_vehicle_history().
+        TrafficPressureEngine.calculate_pressure().
 
-        Schema (matches what TrafficPressureEngine documents):
-            {id, type, confidence, bbox, center, trajectory,
-             first_seen, last_seen, frames_tracked, best_confidence,
-             type_history}
-
-        All of these keys are in _TRACKING_FIELDS so
-        tracked_vehicle_from_dict(strict=True) will accept them.
+        Returns only current-frame vehicle data. Trajectory accumulation
+        is owned solely by TrafficPressureEngine.update_vehicle_history().
         """
         vehicles: List[Dict[str, Any]] = []
 
@@ -454,14 +422,6 @@ class SingleCameraPipeline:
             vehicle_type = self._tracker.VEHICLE_CLASSES[class_id]
             confidence = float(boxes.conf[idx])
             x1, y1, x2, y2 = map(int, boxes.xyxy[idx].tolist())
-            center = [int((x1 + x2) / 2), int((y1 + y2) / 2)]
-
-            # Look up existing history to carry trajectory forward.
-            history = self._vehicle_history.get(track_id, {})
-            trajectory = list(history.get("trajectory", []))
-            trajectory.append(center)
-            type_history = list(history.get("type_history", []))
-            type_history.append(vehicle_type)
 
             vehicles.append(
                 {
@@ -469,15 +429,6 @@ class SingleCameraPipeline:
                     "type": vehicle_type,
                     "confidence": confidence,
                     "bbox": [x1, y1, x2, y2],
-                    "center": center,
-                    "trajectory": trajectory,
-                    "first_seen": history.get("first_seen", frame_number),
-                    "last_seen": frame_number,
-                    "frames_tracked": history.get("frames_tracked", 0) + 1,
-                    "best_confidence": max(
-                        history.get("best_confidence", 0.0), confidence
-                    ),
-                    "type_history": type_history[-30:],  # cap at 30
                 }
             )
 
@@ -504,10 +455,13 @@ class SingleCameraPipeline:
                     camera_id=self.camera_id,
                 )
                 contracts.append(contract)
-            except Exception:
-                # A record that can't be adapted is skipped silently here.
-                # The existing adapter tests cover the error paths.
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to adapt tracking record for track_id=%s at frame %d: %s",
+                    record.get("id"),
+                    frame_number,
+                    exc,
+                )
         return contracts
 
     def _build_plate_observations(
@@ -523,30 +477,31 @@ class SingleCameraPipeline:
             {"text": str, "detection_confidence": float,
              "ocr_confidence": float, "bbox": [x1, y1, x2, y2]}
 
-        Plates with empty text still produce an observation (text="" is
-        valid — the plate was detected but not read).  TrafficSnapshot
-        will count only those with non-empty text.
+        Plates with empty or unread OCR text are skipped so artificial
+        sentinel text is not injected into the contract stream.
         """
         observations: List[PlateObservation] = []
         for plate in raw_plates:
-            text = plate.get("text", "")
+            text = str(plate.get("text", "")).strip()
+            if not text:
+                continue
+
             det_conf = float(plate.get("detection_confidence", 0.0))
             ocr_conf = float(plate.get("ocr_confidence", 0.0))
             bbox = plate.get("bbox", [0, 0, 1, 1])
 
-            # PlateObservation.__post_init__ strips + uppercases text.
             # Ensure det_conf is at least 0.01 to pass validation.
             det_conf = max(det_conf, 0.01)
             ocr_conf = max(ocr_conf, 0.0)
 
-            # Guard: skip completely degenerate bboxes (x2==x1 or y2==y1).
+            # Guard: skip completely degenerate bboxes (x2<=x1 or y2<=y1).
             x1, y1, x2, y2 = bbox
             if x2 <= x1 or y2 <= y1:
                 continue
 
             try:
                 obs = PlateObservation(
-                    plate_text=text if text else "UNKNOWN",
+                    plate_text=text,
                     detection_confidence=det_conf,
                     ocr_confidence=ocr_conf,
                     bbox=(float(x1), float(y1), float(x2), float(y2)),
@@ -556,8 +511,12 @@ class SingleCameraPipeline:
                     coordinate_space="frame",
                 )
                 observations.append(obs)
-            except (ValueError, KeyError):
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to construct PlateObservation at frame %d: %s",
+                    frame_number,
+                    exc,
+                )
 
         return observations
 
