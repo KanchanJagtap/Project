@@ -15,3 +15,7 @@ __pycache__/
 .DS_Store
 
 Impsters_git_backup/
+
+# Local Python virtual environments
+city-anpr/.venv/
+city-anpr-demo/.venv/
