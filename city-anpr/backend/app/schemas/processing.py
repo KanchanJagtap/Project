@@ -106,6 +106,19 @@ class LatestFrameSnapshot(BaseModel):
     signal_reason: Optional[str] = Field(
         default=None, description="Signal decision reason, if available"
     )
+    # Extended 2H traffic analytics fields
+    queue_length: Optional[int] = Field(
+        default=None,
+        description="Queue length from TrafficSnapshot, if available",
+    )
+    moving_vehicles: Optional[int] = Field(
+        default=None,
+        description="Moving vehicle count from TrafficSnapshot, if available",
+    )
+    stationary_vehicles: Optional[int] = Field(
+        default=None,
+        description="Stationary vehicle count from TrafficSnapshot, if available",
+    )
 
     model_config = {"frozen": True}
 
@@ -115,8 +128,9 @@ class ProcessingStatusResponse(BaseModel):
     processing worker.
 
     Fields from 2F are preserved for backward compatibility.
-    Fields added in 2G (elapsed_seconds, fps, latest_frame) are optional
-    and absent from the 2F default IDLE response.
+    Fields added in 2G (elapsed_seconds, fps, latest_frame) and 2H
+    (last_frame_processed_at, seconds_since_last_frame_processed) are optional
+    and absent from the default IDLE response.
     """
 
     state: ProcessingState = Field(
@@ -164,6 +178,15 @@ class ProcessingStatusResponse(BaseModel):
         default=None,
         description="Snapshot of the most recently processed frame",
     )
+    # 2H liveness telemetry ---------------------------------------------------
+    last_frame_processed_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp when the latest frame finished processing",
+    )
+    seconds_since_last_frame_processed: Optional[float] = Field(
+        default=None,
+        description="Seconds elapsed since the latest frame was processed",
+    )
 
 
 class CamerasListResponse(BaseModel):
@@ -179,4 +202,58 @@ class CamerasListResponse(BaseModel):
             "Number of cameras currently in an active state "
             "(STARTING, RUNNING, STOPPING)"
         ),
+    )
+
+
+class ProcessingOverviewResponse(BaseModel):
+    """Aggregated system and multi-camera runtime metrics for dashboard display."""
+
+    total_cameras: int = Field(
+        ..., ge=0, description="Total registered camera workers"
+    )
+    active_cameras: int = Field(
+        ...,
+        ge=0,
+        description="Number of cameras currently STARTING, RUNNING, or STOPPING",
+    )
+    idle_cameras: int = Field(
+        ..., ge=0, description="Number of cameras in IDLE state"
+    )
+    stopped_cameras: int = Field(
+        ..., ge=0, description="Number of cameras in STOPPED or COMPLETED state"
+    )
+    failed_cameras: int = Field(
+        ..., ge=0, description="Number of cameras in FAILED state"
+    )
+    total_processed_frames: int = Field(
+        ...,
+        ge=0,
+        description="Cumulative processed frames across all camera workers",
+    )
+    aggregate_fps: float = Field(
+        ...,
+        ge=0.0,
+        description="Sum of processing FPS across all active camera workers",
+    )
+    average_frame_latency_ms: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Average frame processing latency in ms across active workers",
+    )
+    total_active_vehicles: int = Field(
+        ...,
+        ge=0,
+        description="Sum of active workers' latest-frame active_vehicle_count",
+    )
+    total_plates_detected: int = Field(
+        ...,
+        ge=0,
+        description="Sum of active workers' latest-frame plate_observations_count",
+    )
+    system_status: str = Field(
+        ...,
+        description="Overall system operational status: 'OPTIMAL', 'DEGRADED', or 'IDLE'",
+    )
+    timestamp: datetime = Field(
+        ..., description="Timestamp of the overview evaluation"
     )

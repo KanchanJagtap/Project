@@ -10,6 +10,7 @@ from backend.app.api.endpoints import (
     junctions,
     processing,
     signals,
+    system,
     traffic,
     vehicles,
 )
@@ -22,6 +23,7 @@ api_router.include_router(vehicles.router, prefix="/vehicles", tags=["Vehicles"]
 api_router.include_router(traffic.router, prefix="/traffic", tags=["Traffic"])
 api_router.include_router(signals.router, prefix="/signals", tags=["Signals"])
 api_router.include_router(processing.router, prefix="/processing", tags=["Processing"])
+api_router.include_router(system.router, prefix="/system", tags=["System"])
 
 
 

@@ -29,6 +29,7 @@ from backend.app.db.session import async_session_factory
 from backend.app.schemas.processing import (
     CamerasListResponse,
     LatestFrameSnapshot,
+    ProcessingOverviewResponse,
     ProcessingState,
     ProcessingStatusResponse,
 )
@@ -83,9 +84,15 @@ def _build_latest_frame_snapshot(frame_result: FrameResult) -> LatestFrameSnapsh
 
     pressure: Optional[float] = None
     level: Optional[str] = None
+    queue_len: Optional[int] = None
+    moving_veh: Optional[int] = None
+    stat_veh: Optional[int] = None
     if frame_result.snapshot is not None:
         pressure = round(float(frame_result.snapshot.traffic_pressure), 2)
         level = frame_result.snapshot.traffic_level
+        queue_len = int(frame_result.snapshot.queue_length)
+        moving_veh = int(frame_result.snapshot.moving_vehicles)
+        stat_veh = int(frame_result.snapshot.stationary_vehicles)
 
     green_time: Optional[int] = None
     reason: Optional[str] = None
@@ -109,6 +116,9 @@ def _build_latest_frame_snapshot(frame_result: FrameResult) -> LatestFrameSnapsh
         traffic_level=level,
         signal_green_time=green_time,
         signal_reason=reason,
+        queue_length=queue_len,
+        moving_vehicles=moving_veh,
+        stationary_vehicles=stat_veh,
     )
 
 
@@ -160,6 +170,8 @@ class CameraWorker:
 
         # Runtime latest frame state
         self._latest_frame: Optional[LatestFrameSnapshot] = None
+        self._last_frame_processed_at: Optional[datetime] = None
+        self._total_frame_processing_time_ms: float = 0.0
 
         # Concurrency and task control
         self._task: Optional[asyncio.Task] = None
@@ -175,6 +187,13 @@ class CameraWorker:
             ProcessingState.STOPPING,
         )
 
+    @property
+    def average_frame_latency_ms(self) -> Optional[float]:
+        """Average per-frame processing latency in ms, if any frames processed."""
+        if self._processed_frames > 0 and self._total_frame_processing_time_ms > 0:
+            return round(self._total_frame_processing_time_ms / self._processed_frames, 2)
+        return None
+
     def get_status(self) -> ProcessingStatusResponse:
         """Return the current processing worker status snapshot with runtime metrics."""
         now = datetime.now(timezone.utc)
@@ -187,6 +206,13 @@ class CameraWorker:
             elapsed = max(0.0, round(elapsed_delta, 3))
             if elapsed > 0 and self._processed_frames > 0:
                 fps = round(self._processed_frames / elapsed, 2)
+
+        seconds_since_last: Optional[float] = None
+        if self._last_frame_processed_at is not None:
+            seconds_since_last = max(
+                0.0,
+                round((now - self._last_frame_processed_at).total_seconds(), 3),
+            )
 
         return ProcessingStatusResponse(
             state=self._state,
@@ -201,6 +227,8 @@ class CameraWorker:
             elapsed_seconds=elapsed,
             fps=fps,
             latest_frame=self._latest_frame,
+            last_frame_processed_at=self._last_frame_processed_at,
+            seconds_since_last_frame_processed=seconds_since_last,
         )
 
     async def start(
