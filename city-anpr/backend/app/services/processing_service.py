@@ -232,7 +232,30 @@ class ProcessingService:
         junction_id: str,
         anpr_every_n_frames: int,
     ) -> None:
-        """Internal background worker executing video inference and ingestion."""
+        """Internal background worker executing video inference and ingestion.
+
+        Resource cleanup guarantees:
+        - The generator returned by pipeline.process_video() is explicitly
+          closed via generator.close() in a finally block on all exit paths:
+          normal completion, cooperative stop, pipeline failure, and task
+          cancellation.
+        - The task reference is only cleared when the finishing worker is
+          still the current task, preventing a race where a newly-started
+          task's reference could be clobbered by this worker's finally block.
+
+        Cooperative stop semantics:
+        - A synchronous YOLO inference already in progress will finish
+          before the stop flag is observed. The stop_event is checked
+          between frames, not during inference.
+        """
+        # Capture our own task reference so the finally block can compare
+        # it against self._task to avoid clobbering a newly-started task.
+        current_task = self._task
+
+        # Track the generator so it can be deterministically closed on
+        # all exit paths (completion, stop, failure, cancellation).
+        generator = None
+
         try:
             # Resolve source path
             src_path = Path(source)
@@ -266,7 +289,9 @@ class ProcessingService:
             )
 
             for frame_result in generator:
-                # Cooperative check before processing frame ingestion
+                # Cooperative check between frames. A synchronous YOLO
+                # inference that was already in progress will have
+                # finished by the time we reach this check.
                 if self._stop_event.is_set():
                     break
 
@@ -311,7 +336,20 @@ class ProcessingService:
                 self._finished_at = datetime.now(timezone.utc)
 
         finally:
-            self._task = None
+            # Deterministically close the generator to release any
+            # resources held by the pipeline (e.g. OpenCV VideoCapture).
+            if generator is not None and hasattr(generator, "close"):
+                try:
+                    generator.close()
+                except Exception:
+                    logger.debug("Exception closing pipeline generator", exc_info=True)
+
+            # Only clear the task reference if we are still the current
+            # task. If start() was called again between our last frame
+            # and this finally block, self._task now points to the new
+            # worker and we must not clobber it.
+            if self._task is current_task:
+                self._task = None
 
 
 # Singleton instance and FastAPI dependency provider

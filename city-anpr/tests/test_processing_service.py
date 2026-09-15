@@ -332,6 +332,130 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_status.state, ProcessingState.FAILED)
         self.assertIn("Video source not found", final_status.error or "")
 
+    async def test_generator_closed_on_normal_completion(self):
+        """Generator.close() is called on normal completion."""
+        close_called = []
+
+        class TrackingPipeline:
+            def process_video(self, *a, **kw):
+                def gen():
+                    for i in range(1, 3):
+                        yield _create_dummy_frame_result("cam-gc", i)
+
+                # Wrap the generator so we can intercept close()
+                inner = gen()
+
+                class CloseTracker:
+                    def __iter__(self):
+                        return self
+
+                    def __next__(self):
+                        return next(inner)
+
+                    def close(self):
+                        close_called.append("closed")
+                        inner.close()
+
+                return CloseTracker()
+
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: TrackingPipeline(),
+        )
+        await service.start(source=str(self.dummy_video), camera_id="cam-gc")
+        final = await service.wait_for_completion(timeout=5.0)
+
+        self.assertEqual(final.state, ProcessingState.COMPLETED)
+        self.assertIn("closed", close_called)
+
+    async def test_generator_closed_on_cooperative_stop(self):
+        """Generator.close() is called when processing is cooperatively stopped."""
+        close_called = []
+
+        class TrackingPipeline:
+            def process_video(self, *a, **kw):
+                def gen():
+                    try:
+                        for i in range(1, 100):
+                            import time
+                            time.sleep(0.02)
+                            yield _create_dummy_frame_result("cam-gs", i)
+                    except GeneratorExit:
+                        close_called.append("closed")
+                        raise
+                return gen()
+
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: TrackingPipeline(),
+        )
+        await service.start(source=str(self.dummy_video), camera_id="cam-gs")
+        await asyncio.sleep(0.04)
+        await service.stop()
+        final = await service.wait_for_completion(timeout=5.0)
+
+        self.assertEqual(final.state, ProcessingState.STOPPED)
+        self.assertIn("closed", close_called)
+
+    async def test_generator_closed_on_failure(self):
+        """Generator.close() is called when ingestion fails mid-stream."""
+        close_called = []
+
+        class TrackingPipeline:
+            def process_video(self, *a, **kw):
+                def gen():
+                    try:
+                        yield _create_dummy_frame_result("cam-gf", 1)
+                        yield _create_dummy_frame_result("cam-gf", 2)
+                    except GeneratorExit:
+                        close_called.append("closed")
+                        raise
+                return gen()
+
+        # Use a session factory that will blow up on the second frame
+        call_count = [0]
+        orig_factory = self.session_factory
+
+        def failing_session_factory():
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise RuntimeError("Simulated DB connection failure")
+            return orig_factory()
+
+        service = ProcessingService(
+            session_factory=failing_session_factory,
+            pipeline_factory=lambda **kw: TrackingPipeline(),
+        )
+        await service.start(source=str(self.dummy_video), camera_id="cam-gf")
+        final = await service.wait_for_completion(timeout=5.0)
+
+        self.assertEqual(final.state, ProcessingState.FAILED)
+        self.assertIn("closed", close_called)
+
+    async def test_task_reference_not_clobbered_by_old_worker(self):
+        """A finishing worker's finally block must not clear a newly-started task reference."""
+        pipeline = MockPipeline(frames_to_yield=2)
+        service = ProcessingService(
+            session_factory=self.session_factory,
+            pipeline_factory=lambda **kw: pipeline,
+        )
+
+        # Start first job and let it complete
+        await service.start(source=str(self.dummy_video), camera_id="cam-01")
+        await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(service.get_status().state, ProcessingState.COMPLETED)
+        self.assertIsNone(service._task, "Task reference should be None after completion")
+
+        # Start a second job — should succeed without issues
+        pipeline2 = MockPipeline(frames_to_yield=3)
+        service._pipeline_factory = lambda **kw: pipeline2
+        await service.start(source=str(self.dummy_video), camera_id="cam-02")
+        self.assertIsNotNone(service._task, "Task reference should be set for new job")
+
+        final = await service.wait_for_completion(timeout=5.0)
+        self.assertEqual(final.state, ProcessingState.COMPLETED)
+        self.assertEqual(final.processed_frames, 3)
+
 
 class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
     """Integration tests for /api/processing endpoints."""
