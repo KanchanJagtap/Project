@@ -136,4 +136,3 @@ async def get_processing_overview(
 ) -> ProcessingOverviewResponse:
     """Inspect system-wide aggregated multi-camera runtime metrics."""
     return service.get_overview()
-
