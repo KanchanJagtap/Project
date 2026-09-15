@@ -4,15 +4,15 @@ import cv2
 import numpy as np
 
 from backend.anpr import process_plate
-from backend.real_anpr import get_anpr_pipeline
 from backend.vehicle_db import get_vehicle_details
 
 
 app = FastAPI(
     title="City ANPR Demo API",
-    description="AI-powered city traffic intelligence presentation prototype",
-    version="1.0.0",
+    description="Lightweight AI-powered city traffic intelligence presentation prototype",
+    version="2.0.0",
 )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,7 +31,8 @@ def home():
     return {
         "status": "running",
         "project": "City ANPR Demo",
-        "message": "Backend is working",
+        "mode": "presentation-demo",
+        "message": "Lightweight demo backend is working",
     }
 
 
@@ -39,6 +40,7 @@ def home():
 def health():
     return {
         "status": "healthy",
+        "mode": "presentation-demo",
     }
 
 
@@ -49,84 +51,75 @@ def anpr_demo():
 
 @app.get("/anpr/status")
 def anpr_status():
-    try:
-        pipeline = get_anpr_pipeline()
-
-        return {
-            "status": "ready",
-            "engine": type(pipeline).__name__,
-            "message": "Real ANPR pipeline is loaded",
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e),
-        )
+    return {
+        "status": "ready",
+        "engine": "DemoANPR",
+        "message": "Lightweight presentation ANPR engine is ready",
+        "mode": "demo",
+    }
 
 
 @app.post("/anpr/process")
-async def process_anpr_image(
-    file: UploadFile = File(...)
-):
+async def process_anpr_image(file: UploadFile = File(...)):
+    """
+    Lightweight presentation-mode ANPR endpoint.
+
+    This intentionally does NOT load YOLO, PaddleOCR, or the
+    full city-anpr AI pipeline.
+
+    The endpoint validates the uploaded image and returns a
+    deterministic demo detection using the same response
+    structure expected by the frontend.
+    """
+
     try:
         contents = await file.read()
 
-        image_array = np.frombuffer(
-            contents,
-            dtype=np.uint8,
-        )
+        if not contents:
+            raise ValueError("Uploaded file is empty")
 
-        image = cv2.imdecode(
-            image_array,
-            cv2.IMREAD_COLOR,
-        )
+        image_array = np.frombuffer(contents, dtype=np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
         if image is None:
-            raise ValueError(
-                "Uploaded file is not a valid image"
-            )
+            raise ValueError("Uploaded file is not a valid image")
 
-        pipeline = get_anpr_pipeline()
+        height, width = image.shape[:2]
 
-        detections = pipeline.detect_and_read(image)
+        # Deterministic demo vehicle.
+        plate_number = "MH12AB1234"
 
-        enriched_detections = []
+        vehicle = get_vehicle_details(plate_number)
 
-        for detection in detections:
-            plate_number = detection.get("text", "").strip().upper()
+        # Generate a plausible center-region bounding box.
+        # This is presentation/demo data, not a real detection.
+        x1 = int(width * 0.30)
+        y1 = int(height * 0.60)
+        x2 = int(width * 0.70)
+        y2 = int(height * 0.78)
 
-            vehicle = None
-
-            if plate_number:
-                vehicle = get_vehicle_details(
-                    plate_number
-                )
-
-            enriched_detections.append(
-                {
-                    "plate_number": plate_number,
-                    "detection_confidence": detection.get(
-                        "detection_confidence"
-                    ),
-                    "ocr_confidence": detection.get(
-                        "ocr_confidence"
-                    ),
-                    "bbox": detection.get("bbox"),
-                    "vehicle": vehicle,
-                    "vehicle_found": vehicle is not None,
-                }
-            )
+        detection = {
+            "plate_number": plate_number,
+            "detection_confidence": 0.96,
+            "ocr_confidence": 0.94,
+            "bbox": [x1, y1, x2, y2],
+            "vehicle": vehicle,
+            "vehicle_found": vehicle is not None,
+            "mode": "demo",
+        }
 
         return {
             "status": "success",
             "filename": file.filename,
-            "detection_count": len(enriched_detections),
-            "detections": enriched_detections,
+            "image_width": width,
+            "image_height": height,
+            "detection_count": 1,
+            "detections": [detection],
+            "mode": "presentation-demo",
         }
 
     except Exception as e:
         raise HTTPException(
-            status_code=500,
+            status_code=400,
             detail=str(e),
         )
