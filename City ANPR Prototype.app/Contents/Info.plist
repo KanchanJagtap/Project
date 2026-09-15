@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>City ANPR Prototype</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>City ANPR Prototype</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.rohit.city-anpr-prototype</string>
+
+    <key>CFBundleExecutable</key>
+    <string>City ANPR Prototype</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
