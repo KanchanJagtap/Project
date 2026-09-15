@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.app.db.base import ARRAY_STR_TYPE, Base, JSON_TYPE, UUID_TYPE, utc_now
+from backend.app.db.base import ARRAY_FLOAT_TYPE, ARRAY_STR_TYPE, Base, JSON_TYPE, UUID_TYPE, utc_now
 
 if TYPE_CHECKING:
     from .camera import CameraModel
@@ -55,6 +55,18 @@ class VehicleTrack(Base):
     )
     type_history: Mapped[List[str]] = mapped_column(
         ARRAY_STR_TYPE, default=list, nullable=False
+    )
+    appearance_embedding: Mapped[Optional[List[float]]] = mapped_column(
+        ARRAY_FLOAT_TYPE, nullable=True
+    )
+    embedding_model: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    embedding_dimension: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    embedding_quality: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
     )
 
     __table_args__ = (
