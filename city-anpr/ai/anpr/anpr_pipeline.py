@@ -308,20 +308,12 @@ class ANPRPipeline:
         )
 
 
-        if plate_info is not None:
+        if plate_info is None:
+            return plate_crop
 
-            corners = self.order_points(
-                plate_info["points"]
-            )
-
-        else:
-
-            corners = np.float32([
-                [0, 0],
-                [w - 1, 0],
-                [w - 1, h - 1],
-                [0, h - 1]
-            ])
+        corners = self.order_points(
+            plate_info["points"]
+        )
 
 
         tl, tr, br, bl = corners
@@ -681,7 +673,7 @@ class ANPRPipeline:
         # ----------------------------------------------------
 
         is_two_line = (
-            aspect_ratio < 3.0
+            aspect_ratio < 2.2
         )
 
 
