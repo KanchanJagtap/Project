@@ -22,12 +22,16 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock, MagicMock
 
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import StaticPool
 
 from ai.contracts.models import (
-    BoundingBox,
     PlateObservation,
     TrackedVehicle,
     TrafficSnapshot,
@@ -35,6 +39,7 @@ from ai.contracts.models import (
 from ai.pipeline.single_camera_pipeline import FrameResult
 from ai.traffic.signal_optimizer import SignalDecision
 from backend.app.api.endpoints.processing import get_processing_service
+from backend.app.db.base import Base
 from backend.app.main import app
 from backend.app.schemas.processing import ProcessingState, ProcessingStatusResponse
 from backend.app.services.processing_service import ProcessingService
@@ -48,7 +53,7 @@ def _create_dummy_frame_result(camera_id: str, frame_num: int) -> FrameResult:
         timestamp=datetime.now(timezone.utc),
         tracked_vehicle_contracts=[
             TrackedVehicle(
-                track_id=1,
+                track_id=frame_num,
                 bbox=(10.0, 20.0, 100.0, 120.0),
                 confidence=0.92,
                 vehicle_type="car",
@@ -57,26 +62,32 @@ def _create_dummy_frame_result(camera_id: str, frame_num: int) -> FrameResult:
         ],
         plate_observations=[
             PlateObservation(
-                plate_text="MH12AB1234",
-                confidence=0.88,
-                track_id=1,
+                plate_text=f"MH12AB{frame_num:04d}",
+                detection_confidence=0.90,
+                ocr_confidence=0.88,
+                bbox=(20.0, 30.0, 60.0, 45.0),
+                track_id=frame_num,
                 frame_number=frame_num,
+                camera_id=camera_id,
             )
         ],
         snapshot=TrafficSnapshot(
             camera_id=camera_id,
-            frame_number=frame_num,
             active_vehicle_count=1,
+            queue_length=0,
             moving_vehicles=1,
+            slow_vehicles=0,
             stationary_vehicles=0,
+            traffic_pressure=0.15,
             traffic_level="LOW",
+            frame_number=frame_num,
         ),
         signal_decisions=[
             SignalDecision(
                 approach_id=f"approach-{camera_id}",
-                action="MAINTAIN",
                 priority_score=0.25,
-                green_time=30.0,
+                green_time=30,
+                reason="Normal traffic flow",
             )
         ],
     )
@@ -101,45 +112,64 @@ class MockPipeline:
             yield _create_dummy_frame_result("cam-test-01", i)
 
 
-class MockSessionFactory:
-    """Mock session context manager tracking session creation and closure."""
+class TrackingSessionFactory:
+    """Real SQLite session factory tracking session creation, commits, and closures."""
 
-    def __init__(self):
+    def __init__(self, session_maker):
+        self.session_maker = session_maker
         self.opened_count = 0
         self.closed_count = 0
         self.committed_count = 0
 
     def __call__(self):
-        factory = self
+        parent = self
+        session = self.session_maker()
+        orig_commit = session.commit
 
-        class MockSessionContext:
+        async def tracked_commit():
+            parent.committed_count += 1
+            return await orig_commit()
+
+        session.commit = tracked_commit
+
+        class TrackedContext:
             async def __aenter__(self):
-                factory.opened_count += 1
-                mock_session = AsyncMock()
-                mock_session.commit = AsyncMock(side_effect=self._on_commit)
-                mock_session.rollback = AsyncMock()
-                mock_session.close = AsyncMock()
-                mock_session.flush = AsyncMock()
-                mock_session.execute = AsyncMock()
-                return mock_session
+                parent.opened_count += 1
+                return await session.__aenter__()
 
             async def __aexit__(self, exc_type, exc_val, exc_tb):
-                factory.closed_count += 1
+                try:
+                    return await session.__aexit__(exc_type, exc_val, exc_tb)
+                finally:
+                    parent.closed_count += 1
 
-            def _on_commit(self):
-                factory.committed_count += 1
-
-        return MockSessionContext()
+        return TrackedContext()
 
 
 class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
     """Unit tests covering the ProcessingService lifecycle, state machine, and controls."""
 
     async def asyncSetUp(self):
-        self.session_factory = MockSessionFactory()
+        self.engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            echo=False,
+            poolclass=StaticPool,
+        )
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        self.session_maker = async_sessionmaker(
+            bind=self.engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        self.session_factory = TrackingSessionFactory(self.session_maker)
         self.dummy_video = Path("data/videos/traffic.mp4")
         if not self.dummy_video.exists():
             self.dummy_video = Path(__file__).resolve()
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
 
     async def test_01_initial_state_idle(self):
         """1. Initial state is IDLE with 0 processed frames."""
@@ -172,7 +202,7 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_03_duplicate_start_rejected(self):
         """3. Duplicate start is rejected while a job is active."""
-        pipeline = MockPipeline(frames_to_yield=10, per_frame_delay=0.05)
+        pipeline = MockPipeline(frames_to_yield=15, per_frame_delay=0.03)
         service = ProcessingService(
             session_factory=self.session_factory,
             pipeline_factory=lambda **kw: pipeline,
@@ -250,7 +280,7 @@ class ProcessingServiceUnitTests(unittest.IsolatedAsyncioTestCase):
 
         await service.start(source=str(self.dummy_video), camera_id="cam-01")
         # Give worker time to process at least 1 frame
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.04)
 
         stop_res = await service.stop()
         self.assertIn(stop_res.state, (ProcessingState.STOPPING, ProcessingState.STOPPED))
@@ -307,8 +337,21 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
     """Integration tests for /api/processing endpoints."""
 
     async def asyncSetUp(self):
-        self.session_factory = MockSessionFactory()
-        self.pipeline = MockPipeline(frames_to_yield=10, per_frame_delay=0.03)
+        self.engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            echo=False,
+            poolclass=StaticPool,
+        )
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        self.session_maker = async_sessionmaker(
+            bind=self.engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        self.session_factory = TrackingSessionFactory(self.session_maker)
+        self.pipeline = MockPipeline(frames_to_yield=15, per_frame_delay=0.03)
         self.mock_service = ProcessingService(
             session_factory=self.session_factory,
             pipeline_factory=lambda **kw: self.pipeline,
@@ -326,6 +369,7 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         await self.mock_service.stop()
         await self.mock_service.wait_for_completion(timeout=5.0)
         await self.client.aclose()
+        await self.engine.dispose()
         app.dependency_overrides.clear()
 
     async def test_10_api_status_endpoint_reflects_service_state(self):
@@ -341,7 +385,7 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         payload = {
             "source": str(self.dummy_video),
             "camera_id": "cam-test-api",
-            "max_frames": 5,
+            "max_frames": 10,
         }
 
         response = await self.client.post("/api/processing/start", json=payload)
@@ -352,10 +396,10 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(data["state"], ("STARTING", "RUNNING"))
         self.assertEqual(data["camera_id"], "cam-test-api")
 
-        # Prove that the worker has NOT finished yet when the HTTP call returned
+        # Prove that the worker task is still active and has not finished yet
         self.assertTrue(self.mock_service._task is not None and not self.mock_service._task.done())
 
-        # Now await completion cleanly
+        # Cleanly await completion
         final_status = await self.mock_service.wait_for_completion(timeout=5.0)
         self.assertEqual(final_status.state, ProcessingState.COMPLETED)
 
@@ -364,7 +408,7 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         payload = {
             "source": str(self.dummy_video),
             "camera_id": "cam-test-api",
-            "max_frames": 10,
+            "max_frames": 15,
         }
 
         # First start succeeds
@@ -381,11 +425,11 @@ class ProcessingServiceAPITests(unittest.IsolatedAsyncioTestCase):
         payload = {
             "source": str(self.dummy_video),
             "camera_id": "cam-test-stop",
-            "max_frames": 20,
+            "max_frames": 30,
         }
 
         await self.client.post("/api/processing/start", json=payload)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.04)
 
         res = await self.client.post("/api/processing/stop")
         self.assertEqual(res.status_code, 200)
