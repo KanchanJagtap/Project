@@ -16,3 +16,4 @@ venv/
 
 # OS metadata
 .DS_Store
+vehicle_vit_clip_reid.onnx
