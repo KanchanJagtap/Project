@@ -223,6 +223,9 @@ class IngestionService:
         """
         persisted: List[VehicleTrack] = []
 
+        if self.auto_register_metadata:
+            await self._ensure_camera(camera_id)
+
         for track in tracks:
             local_id = (
                 int(track.track_id)
@@ -288,6 +291,9 @@ class IngestionService:
         persisted: List[PlateObservationModel] = []
         track_map = track_mapping or {}
 
+        if self.auto_register_metadata:
+            await self._ensure_camera(camera_id)
+
         for obs in observations:
             plate_text = obs.plate_text.strip().upper()
             if not plate_text:
@@ -349,6 +355,9 @@ class IngestionService:
         Persist traffic snapshot with idempotency check.
         """
         cam_id = camera_id or snapshot.camera_id
+
+        if self.auto_register_metadata:
+            await self._ensure_camera(cam_id)
 
         # Idempotency check: check if snapshot already recorded for this frame/timestamp
         if snapshot.frame_number is not None:
