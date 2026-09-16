@@ -154,3 +154,27 @@ INFO:     127.0.0.1:59406 - "GET /api/vehicles/MH17JK7890/history HTTP/1.1" 404 
 INFO:     127.0.0.1:59409 - "GET /api/vehicles/MH18LM2468/history HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:59457 - "GET /api/vehicles/MH12AB1234/history HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:59460 - "GET /api/vehicles/MH14CD5678/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59501 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59504 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59499 - "GET /api/system/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59503 - "GET /api/system/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59509 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59512 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59518 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59517 - "GET /api/system/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59523 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59526 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59532 - "GET /api/processing/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59531 - "GET /api/system/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59538 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59537 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59541 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59544 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59547 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59550 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59553 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59556 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59559 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59562 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59567 - "GET /api/processing/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60287 - "GET /health HTTP/1.1" 200 OK
