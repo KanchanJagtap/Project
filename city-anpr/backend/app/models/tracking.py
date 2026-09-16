@@ -65,9 +65,16 @@ class VehicleTrack(Base):
     embedding_dimension: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True
     )
+
     embedding_quality: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True
     )
+
+    association_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    association_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    association_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    association_evidence: Mapped[Optional[dict]] = mapped_column(JSON_TYPE, nullable=True)
+
 
     __table_args__ = (
         Index("idx_tracks_camera_time", "camera_id", "last_seen_at"),
