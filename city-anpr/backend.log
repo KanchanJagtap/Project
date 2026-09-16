@@ -145,3 +145,12 @@ INFO:     127.0.0.1:58987 - "POST /api/processing/anpr_scan HTTP/1.1" 200 OK
 INFO:     127.0.0.1:58991 - "GET /api/vehicles/BR33T4980/history HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:58994 - "GET /api/vehicles/MH14CD5678/history HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:59014 - "GET /api/vehicles/MH12AB1234/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59385 - "GET /api/vehicles/MH14CD5678/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59388 - "GET /api/vehicles/MH12AB1234/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59391 - "GET /api/vehicles/MH14CD5678/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59400 - "GET /api/vehicles/MH15EF9012/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59403 - "GET /api/vehicles/MH16GH3456/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59406 - "GET /api/vehicles/MH17JK7890/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59409 - "GET /api/vehicles/MH18LM2468/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59457 - "GET /api/vehicles/MH12AB1234/history HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59460 - "GET /api/vehicles/MH14CD5678/history HTTP/1.1" 404 Not Found

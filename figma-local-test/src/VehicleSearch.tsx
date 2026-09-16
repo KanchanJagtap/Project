@@ -337,6 +337,11 @@ export default function VehicleSearch() {
       return true;
     } catch (err: any) {
       if (err.message && (err.message.includes('Not found') || err.message.includes('404'))) {
+        const localProfile = VEHICLE_DB[plate];
+        if (localProfile) {
+          setResult(localProfile);
+          return true;
+        }
         setResult(null);
         setNotFound(true);
       } else {
