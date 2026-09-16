@@ -48,17 +48,23 @@ class SQLAlchemyCandidateGenerator(CandidateGenerator):
         if plate_texts:
             conditions.append(Vehicle.canonical_plate_text.in_(plate_texts))
             
-        # B. Topology-linked recent vehicles
+        # B. Topology-linked recent vehicles via SQL relationships
         if valid_source_junctions:
             # Approx max travel time in the city could be 30 mins
             time_threshold = timestamp.timestamp() - 1800
             recent_dt = datetime.fromtimestamp(time_threshold, tz=timezone.utc)
             
-            # We would join on VehicleTrack to verify last_junction_id in valid_source_junctions
-            # For simplicity in this demo, we approximate by recent detection and we filter manually later.
-            conditions.append(
-                Vehicle.last_detected_at >= recent_dt
+            topology_condition = Vehicle.tracks.any(
+                and_(
+                    VehicleTrack.last_seen_at >= recent_dt,
+                    VehicleTrack.camera.has(
+                        CameraModel.approach.has(
+                            JunctionApproach.junction_id.in_(valid_source_junctions)
+                        )
+                    )
+                )
             )
+            conditions.append(topology_condition)
             
         # C. Re-ID Retrieval
         # (Explicitly omitted/abstracted because DB does not support pgvector yet)
@@ -89,11 +95,7 @@ class SQLAlchemyCandidateGenerator(CandidateGenerator):
                 emb_model = latest_track.embedding_model
                 emb_dim = latest_track.embedding_dimension
                 
-            # If fetched via recent_dt, enforce the spatial constraint now
-            if not plate_texts or v.canonical_plate_text not in plate_texts:
-                if last_junction_id not in valid_source_junctions:
-                    continue # Discard conceptually unbounded candidates
-                    
+
             candidates.append(
                 ResolverCandidate(
                     vehicle_id=v.vehicle_id,

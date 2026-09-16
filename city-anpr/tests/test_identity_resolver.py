@@ -50,7 +50,7 @@ async def test_case_a_strong_match(base_track):
 
 @pytest.mark.asyncio
 async def test_case_b_reid_only_strong_candidate(base_track):
-    # Case B: Re-ID-only strong candidate -> PROBABLE or MATCHED based on normalization
+    # Case B: Re-ID-only strong candidate -> MUST cap at PROBABLE
     plates = []
     cand = ResolverCandidate(
         vehicle_id=uuid.uuid4(),
@@ -63,9 +63,10 @@ async def test_case_b_reid_only_strong_candidate(base_track):
     resolver = MultimodalIdentityResolver(gen)
     decision = await resolver.resolve(base_track, plates, "CAM1", datetime.fromtimestamp(1050, tz=timezone.utc))
     
-    assert decision.status == AssociationStatus.MATCHED
+    # Assert capped at PROBABLE even though score is 1.0
+    assert decision.status == AssociationStatus.PROBABLE
     assert decision.method == AssociationMethod.RE_ID
-    assert decision.evidence.score == 1.0 # 0.4 / 0.4 max_weight
+    assert decision.evidence.score == 1.0
 
 @pytest.mark.asyncio
 async def test_case_c_unreadable_plate_strong_reid(base_track):
@@ -81,7 +82,7 @@ async def test_case_c_unreadable_plate_strong_reid(base_track):
     gen = MockCandidateGenerator([cand], {"J1": {"min_travel_time_sec": 10, "max_travel_time_sec": 100}})
     resolver = MultimodalIdentityResolver(gen)
     decision = await resolver.resolve(base_track, plates, "CAM1", datetime.fromtimestamp(1050, tz=timezone.utc))
-    assert decision.status == AssociationStatus.MATCHED
+    assert decision.status == AssociationStatus.PROBABLE
 
 @pytest.mark.asyncio
 async def test_case_d_exact_plate_contradictory_reid(base_track):
@@ -191,7 +192,7 @@ async def test_case_j_missing_topology(base_track):
     gen = MockCandidateGenerator([cand], {}) # Empty edges
     resolver = MultimodalIdentityResolver(gen)
     decision = await resolver.resolve(base_track, plates, "CAM1", datetime.fromtimestamp(1050, tz=timezone.utc))
-    assert decision.status == AssociationStatus.MATCHED
+    assert decision.status == AssociationStatus.PROBABLE
     assert decision.evidence.topology_evidence.get('has_topology') is False
 
 @pytest.mark.asyncio

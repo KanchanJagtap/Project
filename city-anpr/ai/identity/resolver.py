@@ -132,6 +132,16 @@ class MultimodalIdentityResolver:
             if top.plate_evidence.get('has_match') and top.reid_evidence.get('cosine_similarity', 0) > 0.8:
                 method = AssociationMethod.MULTI_MODAL
                 
+            # Block 1: Cap Re-ID Authority
+            if not top.plate_evidence.get('has_match') and method == AssociationMethod.RE_ID:
+                return AssociationDecision(
+                    status=AssociationStatus.PROBABLE,
+                    confidence=top.score,
+                    method=method,
+                    vehicle_id=top.candidate_vehicle_id,
+                    evidence=top
+                )
+                
             return AssociationDecision(
                 status=AssociationStatus.MATCHED,
                 confidence=top.score,
