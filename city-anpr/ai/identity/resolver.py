@@ -1,6 +1,6 @@
 import logging
-from typing import List, Optional, Protocol
-from datetime import datetime, timezone
+from typing import List, Optional, Protocol, Dict
+from datetime import datetime
 import uuid
 
 from ai.contracts.models import TrackedVehicle, PlateObservation
@@ -28,29 +28,25 @@ class CandidateGenerator(Protocol):
     async def check_topology(
         self,
         source_junction_id: str,
-        target_junction_id: str,
+        target_camera_id: str,
     ) -> Optional[dict]:
-        """
-        Returns edge data if a valid edge exists, else None.
-        dict contains 'min_travel_time_sec' and 'max_travel_time_sec'.
-        """
         ...
 
 class ResolverConfig:
-    # Thresholds
+    # Production defaults
     MATCHED_THRESHOLD = 0.85
     PROBABLE_THRESHOLD = 0.65
     NEW_VEHICLE_THRESHOLD = 0.30
     
-    # Weights
-    WEIGHT_EXACT_PLATE = 0.5
+    # Weights for dynamic normalization
+    WEIGHT_EXACT_PLATE = 0.6
     WEIGHT_REID = 0.4
-    WEIGHT_TOPOLOGY = 0.1
-    WEIGHT_TYPE_MATCH = 0.1
+    
+    # Penalties
+    PENALTY_TYPE_MISMATCH = 0.05
     
     # Conflict
     UNCERTAIN_MARGIN = 0.05
-    MIN_REID_FOR_PLATE_CONFLICT = 0.2
 
 class MultimodalIdentityResolver:
     def __init__(
@@ -69,11 +65,9 @@ class MultimodalIdentityResolver:
         timestamp: datetime,
     ) -> AssociationDecision:
         
-        # 1. Gather all high confidence plates
         valid_plates = [p for p in plates if p.ocr_confidence > 0.5]
         plate_texts = list(set([p.plate_text for p in valid_plates]))
         
-        # 2. Get Candidates
         candidates = await self.candidate_generator.get_candidates(
             plate_texts=plate_texts,
             current_camera_id=camera_id,
@@ -81,45 +75,41 @@ class MultimodalIdentityResolver:
         )
         
         if not candidates:
-            # No candidates. Decide based on plate existence.
-            if plate_texts:
-                return AssociationDecision(
-                    status=AssociationStatus.NEW_VEHICLE,
-                    confidence=1.0,
-                    method=AssociationMethod.EXACT_PLATE,
-                )
-            else:
-                return AssociationDecision(
-                    status=AssociationStatus.ANONYMOUS,
-                    confidence=1.0,
-                    method=AssociationMethod.MULTI_MODAL,
-                )
+            return AssociationDecision(
+                status=AssociationStatus.NEW_VEHICLE if plate_texts else AssociationStatus.ANONYMOUS,
+                confidence=0.0,
+                method=AssociationMethod.MULTI_MODAL,
+            )
 
-        # 3. Score Candidates
         scored_evidence = []
         for cand in candidates:
             evidence = await self._score_candidate(cand, track, valid_plates, camera_id, timestamp)
             scored_evidence.append(evidence)
             
-        # 4. Filter hard rejected
         valid_evidence = [e for e in scored_evidence if not e.hard_rejected]
         
         if not valid_evidence:
             return AssociationDecision(
                 status=AssociationStatus.NEW_VEHICLE if plate_texts else AssociationStatus.ANONYMOUS,
-                confidence=1.0,
+                confidence=0.0,
                 method=AssociationMethod.MULTI_MODAL,
             )
             
-        # Sort by score descending
         valid_evidence.sort(key=lambda x: x.score, reverse=True)
         top = valid_evidence[0]
         
-        # 5. Conflict Resolution
+        # Cross-modal conflict check
+        # e.g., OCR prefers A, Re-ID prefers B
         if len(valid_evidence) > 1:
             runner_up = valid_evidence[1]
-            if (top.score - runner_up.score) < self.config.UNCERTAIN_MARGIN and top.score >= self.config.PROBABLE_THRESHOLD:
-                # Close competitors -> UNCERTAIN
+            
+            top_plate_match = top.plate_evidence.get('has_match', False)
+            runner_plate_match = runner_up.plate_evidence.get('has_match', False)
+            top_reid = top.reid_evidence.get('cosine_similarity', 0.0)
+            runner_reid = runner_up.reid_evidence.get('cosine_similarity', 0.0)
+            
+            # If top has plate but runner_up has significantly better Re-ID (> 0.2 diff) and both are decent candidates
+            if top_plate_match and not runner_plate_match and (runner_reid - top_reid > 0.5) and runner_reid > 0.8:
                 return AssociationDecision(
                     status=AssociationStatus.UNCERTAIN,
                     confidence=top.score,
@@ -127,21 +117,20 @@ class MultimodalIdentityResolver:
                     evidence=top
                 )
                 
-        # 6. Final Decision
+            # Close competitors check
+            if (top.score - runner_up.score) <= self.config.UNCERTAIN_MARGIN and top.score >= self.config.PROBABLE_THRESHOLD:
+                return AssociationDecision(
+                    status=AssociationStatus.UNCERTAIN,
+                    confidence=top.score,
+                    method=AssociationMethod.MULTI_MODAL,
+                    evidence=top
+                )
+                
+        # Final Decision
         if top.score >= self.config.MATCHED_THRESHOLD:
-            # Case D check: Strong plate but terrible ReID
-            if top.plate_evidence.get('has_match') and top.reid_evidence:
-                if top.reid_evidence.get('cosine_similarity', 1.0) < self.config.MIN_REID_FOR_PLATE_CONFLICT:
-                    return AssociationDecision(
-                        status=AssociationStatus.UNCERTAIN,
-                        confidence=top.score,
-                        method=AssociationMethod.MULTI_MODAL,
-                        evidence=top
-                    )
-                    
-            method = AssociationMethod.EXACT_PLATE if top.plate_evidence.get('has_match') else AssociationMethod.MULTI_MODAL
-            if not top.plate_evidence.get('has_match') and top.reid_evidence.get('cosine_similarity', 0) > 0.8:
-                method = AssociationMethod.RE_ID
+            method = AssociationMethod.EXACT_PLATE if top.plate_evidence.get('has_match') else AssociationMethod.RE_ID
+            if top.plate_evidence.get('has_match') and top.reid_evidence.get('cosine_similarity', 0) > 0.8:
+                method = AssociationMethod.MULTI_MODAL
                 
             return AssociationDecision(
                 status=AssociationStatus.MATCHED,
@@ -151,17 +140,18 @@ class MultimodalIdentityResolver:
                 evidence=top
             )
         elif top.score >= self.config.PROBABLE_THRESHOLD:
+            method = AssociationMethod.EXACT_PLATE if top.plate_evidence.get('has_match') else AssociationMethod.RE_ID
             return AssociationDecision(
                 status=AssociationStatus.PROBABLE,
                 confidence=top.score,
-                method=AssociationMethod.MULTI_MODAL,
+                method=method,
                 vehicle_id=top.candidate_vehicle_id,
                 evidence=top
             )
         else:
             return AssociationDecision(
                 status=AssociationStatus.NEW_VEHICLE if plate_texts else AssociationStatus.ANONYMOUS,
-                confidence=top.score,
+                confidence=0.0,
                 method=AssociationMethod.MULTI_MODAL,
                 evidence=top
             )
@@ -175,65 +165,25 @@ class MultimodalIdentityResolver:
         timestamp: datetime,
     ) -> IdentityEvidence:
         ev = IdentityEvidence(candidate_vehicle_id=candidate.vehicle_id)
-        score = 0.0
         
-        # --- Plate Evidence ---
-        plate_match = False
-        max_ocr = 0.0
-        for p in valid_plates:
-            if p.plate_text == candidate.canonical_plate_text:
-                plate_match = True
-                max_ocr = max(max_ocr, p.ocr_confidence)
-                
-        if plate_match:
-            ev.plate_evidence = {
-                "has_match": True,
-                "similarity": 1.0,
-                "max_ocr_confidence": max_ocr
-            }
-            score += self.config.WEIGHT_EXACT_PLATE * max_ocr
-        else:
-            ev.plate_evidence = {"has_match": False}
-            
-        # --- ReID Evidence ---
-        if track.appearance_embedding and candidate.latest_appearance_embedding:
-            te = track.appearance_embedding
-            if candidate.embedding_model != te.model_name or candidate.embedding_dimension != te.dimension:
-                # Incompatible model, but required if no plate match
-                ev.reid_evidence = {"model_compatibility": False}
-                if not plate_match:
-                    ev.hard_rejected = True
-                    ev.rejection_reason = "Incompatible embedding model and no plate match"
-                    return ev
-            else:
-                ce = AppearanceEmbedding(
-                    vector=candidate.latest_appearance_embedding,
-                    model_name=candidate.embedding_model,
-                    dimension=candidate.embedding_dimension
-                )
-                sim = cosine_similarity(te, ce)
-                q = te.quality_score or 1.0
-                ev.reid_evidence = {
-                    "cosine_similarity": float(sim),
-                    "embedding_quality": float(q),
-                    "model_compatibility": True
-                }
-                score += self.config.WEIGHT_REID * max(0, sim) * q
-                
-        # --- Temporal / Topology Evidence ---
+        # 1. Temporal / Topology Hard Filters
         time_delta_sec = (timestamp - candidate.last_detected_at).total_seconds()
         ev.temporal_evidence = {"time_delta_sec": time_delta_sec}
         
+        if time_delta_sec < 0:
+            ev.hard_rejected = True
+            ev.rejection_reason = "Negative travel time"
+            return ev
+            
         if candidate.last_junction_id:
-            # We assume we have a mapping from camera_id to junction_id.
-            # In CandidateGenerator we can do this via an edge check.
             edge = await self.candidate_generator.check_topology(
                 source_junction_id=candidate.last_junction_id,
-                target_junction_id="current_junction"  # generator will map current_camera to junction
+                target_camera_id=camera_id  # Abstracted inside generator
             )
             if edge:
                 ev.topology_evidence = {
                     "has_topology": True,
+                    "is_possible": True,
                     "min_travel_time": edge['min_travel_time_sec'],
                     "max_travel_time": edge['max_travel_time_sec']
                 }
@@ -242,21 +192,74 @@ class MultimodalIdentityResolver:
                     ev.hard_rejected = True
                     ev.rejection_reason = "Impossible topology travel time"
                     return ev
-                else:
-                    ev.topology_evidence["is_possible"] = True
-                    score += self.config.WEIGHT_TOPOLOGY
             else:
-                # No active edge between the known junctions
-                # Could be a hard reject depending on city layout. For now, neutral.
                 ev.topology_evidence = {"has_topology": False}
-                
-        # --- Consistency Evidence ---
+        else:
+            ev.topology_evidence = {"has_topology": False}
+            
+        # 2. Dynamic Evidence Scoring
+        raw_score = 0.0
+        max_possible_weight = 0.0
+        
+        # --- Plate Evidence ---
+        plate_match = False
+        max_ocr = 0.0
+        if valid_plates and candidate.canonical_plate_text:
+            max_possible_weight += self.config.WEIGHT_EXACT_PLATE
+            for p in valid_plates:
+                if p.plate_text == candidate.canonical_plate_text:
+                    plate_match = True
+                    max_ocr = max(max_ocr, p.ocr_confidence)
+                    
+            if plate_match:
+                ev.plate_evidence = {
+                    "has_match": True,
+                    "similarity": 1.0,
+                    "max_ocr_confidence": max_ocr
+                }
+                raw_score += self.config.WEIGHT_EXACT_PLATE * max_ocr
+            else:
+                ev.plate_evidence = {"has_match": False}
+        else:
+            ev.plate_evidence = {"has_match": False}
+            
+        # --- ReID Evidence ---
+        if track.appearance_embedding and candidate.latest_appearance_embedding:
+            te = track.appearance_embedding
+            if candidate.embedding_model != te.model_name or candidate.embedding_dimension != te.dimension:
+                ev.reid_evidence = {"comparable": False, "model_compatibility": False}
+                # Missing evidence, max_possible_weight NOT increased.
+            else:
+                max_possible_weight += self.config.WEIGHT_REID
+                ce = AppearanceEmbedding(
+                    vector=candidate.latest_appearance_embedding,
+                    model_name=candidate.embedding_model,
+                    dimension=candidate.embedding_dimension
+                )
+                sim = float(cosine_similarity(te, ce))
+                q = te.quality_score or 1.0
+                ev.reid_evidence = {
+                    "comparable": True,
+                    "model_compatibility": True,
+                    "cosine_similarity": sim,
+                    "embedding_quality": q,
+                }
+                raw_score += self.config.WEIGHT_REID * max(0, sim) * q
+        else:
+            ev.reid_evidence = {"comparable": False}
+            
+        # 3. Score Normalization
+        if max_possible_weight > 0:
+            normalized_score = raw_score / max_possible_weight
+        else:
+            normalized_score = 0.0
+            
+        # 4. Consistency Evidence (Soft Penalty)
         if candidate.canonical_vehicle_type == track.vehicle_type:
             ev.consistency_evidence = {"vehicle_type_match": True}
-            score += self.config.WEIGHT_TYPE_MATCH
         else:
             ev.consistency_evidence = {"vehicle_type_match": False}
-            score -= 0.1  # penalize mismatch
+            normalized_score -= self.config.PENALTY_TYPE_MISMATCH
             
-        ev.score = max(0.0, min(1.0, score))
+        ev.score = max(0.0, min(1.0, normalized_score))
         return ev

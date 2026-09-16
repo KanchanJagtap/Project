@@ -26,35 +26,56 @@ class SQLAlchemyCandidateGenerator(CandidateGenerator):
         timestamp: datetime,
     ) -> List[ResolverCandidate]:
         
-        # Determine current junction
+        # 1. Resolve current junction dynamically
         cam_stmt = select(CameraModel).options(selectinload(CameraModel.approach)).where(CameraModel.camera_id == current_camera_id)
         cam_res = await self.session.execute(cam_stmt)
         cam = cam_res.scalars().first()
         self.current_camera_junction_id = cam.approach.junction_id if cam and cam.approach else None
         
+        # 2. Get active incoming edges to this junction
+        valid_source_junctions = []
+        if self.current_camera_junction_id:
+            edge_stmt = select(TopologyEdge.source_junction_id).where(
+                TopologyEdge.target_junction_id == self.current_camera_junction_id,
+                TopologyEdge.is_active == True
+            )
+            edge_res = await self.session.execute(edge_stmt)
+            valid_source_junctions = [r for r in edge_res.scalars().all()]
+            
+        # 3. Explicitly bounded constraints
         conditions = []
+        # A. Exact Plate
         if plate_texts:
             conditions.append(Vehicle.canonical_plate_text.in_(plate_texts))
             
-        # Add Spatio-Temporal condition (e.g. seen in last 10 minutes)
-        # In a real system, we'd join with topology here.
-        # For this prototype, we'll fetch recently seen vehicles.
-        time_threshold = timestamp.timestamp() - 600  # 10 minutes
-        recent_dt = datetime.fromtimestamp(time_threshold, tz=timezone.utc)
-        conditions.append(Vehicle.last_detected_at >= recent_dt)
+        # B. Topology-linked recent vehicles
+        if valid_source_junctions:
+            # Approx max travel time in the city could be 30 mins
+            time_threshold = timestamp.timestamp() - 1800
+            recent_dt = datetime.fromtimestamp(time_threshold, tz=timezone.utc)
+            
+            # We would join on VehicleTrack to verify last_junction_id in valid_source_junctions
+            # For simplicity in this demo, we approximate by recent detection and we filter manually later.
+            conditions.append(
+                Vehicle.last_detected_at >= recent_dt
+            )
+            
+        # C. Re-ID Retrieval
+        # (Explicitly omitted/abstracted because DB does not support pgvector yet)
         
+        if not conditions:
+            return []
+            
         stmt = (
             select(Vehicle)
             .options(selectinload(Vehicle.tracks).selectinload(VehicleTrack.camera).selectinload(CameraModel.approach))
             .where(or_(*conditions))
-            .limit(100)
         )
         res = await self.session.execute(stmt)
         vehicles = res.scalars().all()
         
         candidates = []
         for v in vehicles:
-            # Find the latest track for this vehicle to get junction and embedding
             last_junction_id = None
             latest_emb = None
             emb_model = None
@@ -68,6 +89,11 @@ class SQLAlchemyCandidateGenerator(CandidateGenerator):
                 emb_model = latest_track.embedding_model
                 emb_dim = latest_track.embedding_dimension
                 
+            # If fetched via recent_dt, enforce the spatial constraint now
+            if not plate_texts or v.canonical_plate_text not in plate_texts:
+                if last_junction_id not in valid_source_junctions:
+                    continue # Discard conceptually unbounded candidates
+                    
             candidates.append(
                 ResolverCandidate(
                     vehicle_id=v.vehicle_id,
@@ -86,10 +112,9 @@ class SQLAlchemyCandidateGenerator(CandidateGenerator):
     async def check_topology(
         self,
         source_junction_id: str,
-        target_junction_id: str,
+        target_camera_id: str,
     ) -> Optional[dict]:
-        if target_junction_id == "current_junction":
-            target_junction_id = self.current_camera_junction_id
+        target_junction_id = self.current_camera_junction_id
             
         if not target_junction_id or not source_junction_id:
             return None

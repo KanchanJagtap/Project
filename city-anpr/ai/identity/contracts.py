@@ -58,7 +58,6 @@ class ResolverCandidate:
     canonical_vehicle_type: str
     last_detected_at: datetime
     last_junction_id: Optional[str] = None
-    # For in-memory ReID checking
     latest_appearance_embedding: Optional[List[float]] = None
     embedding_model: Optional[str] = None
     embedding_dimension: Optional[int] = None
