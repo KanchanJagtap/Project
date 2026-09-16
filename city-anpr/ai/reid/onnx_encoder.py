@@ -39,10 +39,11 @@ class ONNXAppearanceEncoder(AppearanceEncoder):
     def _preprocess(self, crop: np.ndarray) -> np.ndarray:
         """
         Preprocess the vehicle crop exactly as required by the model.
+        Derived from Syliz517/CLIP-ReID configs/veri/vit_base.yml:
         - Resize to 256x256
         - BGR to RGB
         - Float32
-        - ImageNet Normalization
+        - Mean=[0.5, 0.5, 0.5], Std=[0.5, 0.5, 0.5]
         - NCHW format
         """
         # Resize
@@ -52,9 +53,9 @@ class ONNXAppearanceEncoder(AppearanceEncoder):
         # Float32, scale to [0,1]
         rgb_float = rgb.astype(np.float32) / 255.0
         
-        # ImageNet norm
-        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        # CLIP-ReID VeRi norm
+        mean = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        std = np.array([0.5, 0.5, 0.5], dtype=np.float32)
         normalized = (rgb_float - mean) / std
         
         # HWC -> CHW

@@ -118,8 +118,7 @@ def test_16_real_encoder_smoke():
         pytest.skip("Test image not found.")
         
     # Fake a bbox that captures the center of the image
-    h, w = img.shape[:2]
-    bbox = (float(w//4), float(h//4), float(w*3//4), float(h*3//4))
+    bbox = (278.256, 2.893, 2353.353, 1627.965)
     
     # Extract crop using ai/reid/crop.py to validate the pipeline
     from ai.reid.crop import extract_vehicle_crop
@@ -144,9 +143,10 @@ def test_16_real_encoder_smoke():
     np.testing.assert_array_almost_equal(emb1.vector, emb2.vector, decimal=5)
     
     # 10.I. Two genuinely different vehicle crops produce different embeddings
-    img2 = cv2.imread('data/test/indian-plates/images/image_0027.jpg')
+    img2 = cv2.imread('data/test/indian-plates/images/image_0026.jpg')
     if img2 is not None:
-        crop2 = extract_vehicle_crop(img2, bbox)
+        bbox2 = (52.137, 406.955, 1968.0, 2953.866)
+        crop2 = extract_vehicle_crop(img2, bbox2)
         emb3 = encoder.encode(crop2)
         assert not np.allclose(emb1.vector, emb3.vector, atol=1e-3)
         
@@ -181,8 +181,7 @@ def test_17_reid_service_real_integration():
     if img is None:
         pytest.skip("Test image not found.")
         
-    h, w = img.shape[:2]
-    bbox = (float(w//4), float(h//4), float(w*3//4), float(h*3//4))
+    bbox = (278.256, 2.893, 2353.353, 1627.965)
     
     # 10.L. ReIDService successfully returns embedding
     emb = service.extract_evidence(img, bbox)
