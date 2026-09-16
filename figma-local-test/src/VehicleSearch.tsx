@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { JUNCTIONS, type VehicleProfile, type Detection } from './data';
+import { JUNCTIONS, type VehicleProfile, type Detection, VEHICLE_DB } from './data';
 import { api } from './api/client';
 
 const TRAJECTORY_CAMS = ['CAM-01', 'CAM-04', 'CAM-07', 'CAM-12', 'CAM-18', 'CAM-22'];
@@ -795,11 +795,16 @@ export default function VehicleSearch() {
             </div>
           </div>
 
-          {anprError && (
-            <div className="px-4 pb-4 text-xs" style={{ color: '#DC2626' }}>
-              {anprError}
-            </div>
-          )}
+        </div>
+      )}
+
+      {anprError && (
+        <div className="rounded-xl border overflow-hidden p-4 mb-4" style={{ borderColor: '#FECACA', background: '#FEF2F2' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 rounded-full bg-red-600" />
+            <span className="text-sm font-bold" style={{ color: '#991B1B' }}>ANPR ERROR</span>
+          </div>
+          <div className="text-sm" style={{ color: '#DC2626' }}>{anprError}</div>
         </div>
       )}
 
