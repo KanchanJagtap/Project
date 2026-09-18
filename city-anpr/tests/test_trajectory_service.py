@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 import uuid
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from backend.app.db.base import Base
 
@@ -17,6 +18,7 @@ from backend.app.models.observation import PlateObservationModel
 from backend.app.services.identity_resolver import SQLAlchemyCandidateGenerator
 from ai.identity.resolver import MultimodalIdentityResolver, ResolverConfig
 from backend.app.services.trajectory_service import TrajectoryService
+from ai.identity.contracts import AssociationStatus
 
 class LogCaptureHandler(logging.Handler):
     def __init__(self):
@@ -42,7 +44,6 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.resolver = MultimodalIdentityResolver(self.candidate_generator, ResolverConfig())
         self.service = TrajectoryService(self.session, self.resolver)
         
-        # Capture logs
         self.log_handler = LogCaptureHandler()
         logging.getLogger("backend.app.services.trajectory_service").addHandler(self.log_handler)
         logging.getLogger("backend.app.services.trajectory_service").setLevel(logging.INFO)
@@ -54,23 +55,19 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
         logging.getLogger("backend.app.services.trajectory_service").removeHandler(self.log_handler)
         
     async def _seed_network(self):
-        # Junctions: J1 (CamA) -> J2 (CamB) -> J3 (CamC)
         j1 = Junction(junction_id="J1", name="J1")
         j2 = Junction(junction_id="J2", name="J2")
         j3 = Junction(junction_id="J3", name="J3")
         
-        app_a = JunctionApproach(approach_id="AppA", junction_id="J1", direction_name="A")
-        app_b = JunctionApproach(approach_id="AppB", junction_id="J2", direction_name="B")
-        app_c = JunctionApproach(approach_id="AppC", junction_id="J3", direction_name="C")
+        app_a = JunctionApproach(approach_id="AppA", junction_id="J1", direction_name="A", camera_id="CamA")
+        app_b = JunctionApproach(approach_id="AppB", junction_id="J2", direction_name="B", camera_id="CamB")
+        app_c = JunctionApproach(approach_id="AppC", junction_id="J3", direction_name="C", camera_id="CamC")
         
         cam_a = CameraModel(camera_id="CamA", source="a", name="Camera A")
         cam_b = CameraModel(camera_id="CamB", source="b", name="Camera B")
         cam_c = CameraModel(camera_id="CamC", source="c", name="Camera C")
         
-        # Edges
-        # J1 -> J2 takes 60-120s
         edge1 = TopologyEdge(source_junction_id="J1", target_junction_id="J2", distance_meters=1000, min_travel_time_sec=60, max_travel_time_sec=120)
-        # J2 -> J3 takes 60-120s
         edge2 = TopologyEdge(source_junction_id="J2", target_junction_id="J3", distance_meters=1000, min_travel_time_sec=60, max_travel_time_sec=120)
         
         self.session.add_all([j1, j2, j3, app_a, app_b, app_c, cam_a, cam_b, cam_c, edge1, edge2])
@@ -113,34 +110,18 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_to_b_successful_association(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        # 1. Add track at CamA
         await self._add_track("CamA", 1, t1, plate="MH12AB1234")
+        await self.service.stitch_unassociated_tracks()
         
-        # Stitch
-        stitched = await self.service.stitch_unassociated_tracks()
-        self.assertEqual(stitched, 1) # New vehicle
-        
-        # 2. Add track at CamB
-        t2 = t1 + timedelta(seconds=90) # valid topology time
+        t2 = t1 + timedelta(seconds=90)
         await self._add_track("CamB", 2, t2, plate="MH12AB1234")
+        result = await self.service.stitch_unassociated_tracks()
         
-        stitched = await self.service.stitch_unassociated_tracks()
-        self.assertEqual(stitched, 1) # Associated to existing
-        
-        # Check alerts
-        logs = [r.getMessage() for r in self.log_handler.records]
-        self.assertTrue(any("arrived at Camera CamB" in msg for msg in logs))
-        
-        # Check trajectory
-        v_res = await self.session.execute(select(Vehicle))
-        v = v_res.scalars().first()
-        traj = await self.service.get_trajectory(v.vehicle_id)
-        
-        self.assertEqual(len(traj["journey"]), 2)
-        self.assertEqual(traj["journey"][0]["camera_id"], "CamA")
-        self.assertEqual(traj["journey"][1]["camera_id"], "CamB")
-        self.assertEqual(traj["journey"][0]["association_status"], "NEW_VEHICLE")
-        self.assertEqual(traj["journey"][1]["association_status"], "MATCHED")
+        events = result.events
+        arrival_events = [e for e in events if e["event_type"] == "VEHICLE_CAMERA_ARRIVAL"]
+        self.assertEqual(len(arrival_events), 1)
+        self.assertEqual(arrival_events[0]["from_camera_id"], "CamA")
+        self.assertEqual(arrival_events[0]["to_camera_id"], "CamB")
 
     async def test_a_b_c_successful_trajectory(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -156,10 +137,16 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
         v = v_res.scalars().first()
         traj = await self.service.get_trajectory(v.vehicle_id)
         
-        self.assertEqual(len(traj["journey"]), 3)
-        self.assertEqual(traj["journey"][2]["camera_id"], "CamC")
-        self.assertEqual(traj["journey"][0]["sequence"], 1)
-        self.assertEqual(traj["journey"][2]["sequence"], 3)
+        journey = traj["journey"]
+        self.assertEqual(len(journey), 5)
+        self.assertEqual(journey[0]["type"], "track")
+        self.assertEqual(journey[1]["type"], "transition")
+        self.assertEqual(journey[1]["from_camera_id"], "CamA")
+        self.assertEqual(journey[1]["to_camera_id"], "CamB")
+        self.assertEqual(journey[2]["type"], "track")
+        self.assertEqual(journey[3]["type"], "transition")
+        self.assertEqual(journey[3]["from_camera_id"], "CamB")
+        self.assertEqual(journey[3]["to_camera_id"], "CamC")
 
     async def test_different_vehicles_at_a_and_b(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -168,57 +155,76 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
         
         await self.service.stitch_unassociated_tracks()
         
-        # Should be 2 distinct vehicles
         v_res = await self.session.execute(select(Vehicle))
         vehicles = v_res.scalars().all()
         self.assertEqual(len(vehicles), 2)
 
     async def test_impossible_topology_transition(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        # CamA -> CamC has no direct edge, and doing it directly is impossible topology
-        await self._add_track("CamA", 1, t1, plate="MH12AB1234")
-        # CamC without going through CamB
-        await self._add_track("CamC", 2, t1 + timedelta(seconds=90), plate="MH12AB1234")
+        emb = [1.0, 0.0]
+        await self._add_track("CamA", 1, t1, plate="MH12AB1234", emb=emb)
+        await self.service.stitch_unassociated_tracks()
+        
+        # Track 2 at CamC has NO plate, but same embedding
+        # Because there's no topology A->C, it won't be retrieved as a candidate.
+        await self._add_track("CamC", 2, t1 + timedelta(seconds=90), plate=None, emb=emb)
         
         await self.service.stitch_unassociated_tracks()
         
-        # Because there is no active incoming edge from CamA to CamC, the generator will not pick up the candidate via topology. 
-        # But wait! Does candidate generator pick up by exact plate anyway? Yes!
-        # But MultimodalIdentityResolver will penalize missing topology.
-        # Since it's exact plate, it might still MATCH if exact plate is highly trusted.
-        # Let's check how resolver behaves with missing topology but exact plate.
-        pass
+        v_res = await self.session.execute(select(Vehicle))
+        vehicles = v_res.scalars().all()
+        self.assertEqual(len(vehicles), 1)
+        
+        tracks_res = await self.session.execute(select(VehicleTrack).order_by(VehicleTrack.first_seen_at))
+        tracks = tracks_res.scalars().all()
+        self.assertEqual(tracks[1].association_status, "ANONYMOUS")
+        self.assertIsNone(tracks[1].vehicle_id)
 
     async def test_impossible_travel_time_transition(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         await self._add_track("CamA", 1, t1, plate="MH12AB1234")
-        # J1->J2 takes min 60s. We arrive in 5s (impossible travel time)
         await self._add_track("CamB", 2, t1 + timedelta(seconds=5), plate="MH12AB1234")
         
         await self.service.stitch_unassociated_tracks()
         
-        # The resolver hard rejects impossible travel times.
         v_res = await self.session.execute(select(Vehicle))
         vehicles = v_res.scalars().all()
-        self.assertEqual(len(vehicles), 2) # Rejected, so new vehicle created
+        self.assertEqual(len(vehicles), 1)
         
         tracks_res = await self.session.execute(select(VehicleTrack).order_by(VehicleTrack.first_seen_at))
         tracks = tracks_res.scalars().all()
-        self.assertEqual(tracks[1].association_status, "NEW_VEHICLE")
+        self.assertEqual(tracks[1].association_status, "ANONYMOUS")
+        self.assertIsNone(tracks[1].vehicle_id)
+
+    async def test_hard_rejected_transition_does_not_create_new_canonical_vehicle(self):
+        t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        await self._add_track("CamA", 1, t1, plate="MH12AB1234")
+        await self._add_track("CamB", 2, t1 + timedelta(seconds=5), plate="MH12AB1234")
+        
+        await self.service.stitch_unassociated_tracks()
+        
+        t_res = await self.session.execute(select(VehicleTrack).order_by(VehicleTrack.first_seen_at))
+        tracks = t_res.scalars().all()
+        self.assertEqual(len(tracks), 2)
+        self.assertEqual(tracks[0].association_status, "NEW_VEHICLE")
+        self.assertIsNotNone(tracks[0].vehicle_id)
+        
+        self.assertEqual(tracks[1].association_status, "ANONYMOUS")
+        self.assertIsNone(tracks[1].vehicle_id)
+        
+        v_res = await self.session.execute(select(Vehicle))
+        vehicles = v_res.scalars().all()
+        self.assertEqual(len(vehicles), 1)
 
     async def test_reid_supported_association_without_exact_plate(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        # Track 1 has plate + emb
         emb = [1.0, 0.0]
         await self._add_track("CamA", 1, t1, plate="MH12AB1234", emb=emb)
-        
-        # Track 2 has no plate, but matching emb
         t2 = t1 + timedelta(seconds=90)
         await self._add_track("CamB", 2, t2, plate=None, emb=emb)
         
         await self.service.stitch_unassociated_tracks()
         
-        # Should be merged! ReID-only capped at PROBABLE
         v_res = await self.session.execute(select(Vehicle))
         vehicles = v_res.scalars().all()
         self.assertEqual(len(vehicles), 1)
@@ -230,19 +236,15 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_uncertain_conflicting_candidates(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        # Create two identical vehicles that just passed CamA
         await self._add_track("CamA", 1, t1, plate="V1", emb=[1.0, 0.0])
         await self._add_track("CamA", 2, t1, plate="V2", emb=[1.0, 0.0])
-        
         await self.service.stitch_unassociated_tracks()
         
-        # Track at CamB with NO plate, but matching embedding
         t2 = t1 + timedelta(seconds=90)
         await self._add_track("CamB", 3, t2, plate=None, emb=[1.0, 0.0])
         
         await self.service.stitch_unassociated_tracks()
         
-        # Resolver should be UNCERTAIN because it matches both V1 and V2 identically
         tracks_res = await self.session.execute(select(VehicleTrack).where(VehicleTrack.local_track_id == 3))
         t3 = tracks_res.scalars().first()
         self.assertEqual(t3.association_status, "UNCERTAIN")
@@ -255,22 +257,22 @@ class TrajectoryServiceTests(unittest.IsolatedAsyncioTestCase):
         
         await self.service.stitch_unassociated_tracks()
         
-        # Trajectory correctly differentiates by camera_id + track_id
         v_res = await self.session.execute(select(Vehicle))
         vehicles = v_res.scalars().all()
         self.assertEqual(len(vehicles), 1)
         traj = await self.service.get_trajectory(vehicles[0].vehicle_id)
+        
+        # journey: track A, transition A->B, track B
         self.assertEqual(traj["journey"][0]["camera_id"], "CamA")
-        self.assertEqual(traj["journey"][1]["camera_id"], "CamB")
+        self.assertEqual(traj["journey"][2]["camera_id"], "CamB")
 
     async def test_missing_topology(self):
         t1 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         await self._add_track("CamC", 1, t1, plate="MH12AB1234")
-        await self._add_track("CamA", 2, t1 + timedelta(minutes=10), plate="MH12AB1234")
+        await self._add_track("CamB", 2, t1 + timedelta(minutes=10), plate="MH12AB1234")
         
         await self.service.stitch_unassociated_tracks()
-        # Should still associate via EXACT_PLATE despite no explicit edge, because it's exact plate and reasonable time gap
+        
         v_res = await self.session.execute(select(Vehicle))
         vehicles = v_res.scalars().all()
         self.assertEqual(len(vehicles), 1)
-
